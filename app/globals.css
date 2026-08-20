@@ -105,6 +105,12 @@ h2 { margin: 0; font-size: clamp(23px, 2.2vw, 32px); letter-spacing: -.045em; fo
 .icon-button { border: 1px solid var(--line); border-radius: 12px; background: #1a201d; color: var(--paper); font-size: 22px; cursor: pointer; }
 .calibrating-card { min-height: 56px; margin-top: auto; display: flex; align-items: center; gap: 12px; padding: 0 15px; border: 1px solid rgba(255,210,87,.2); border-radius: 12px; color: var(--amber); font-size: 11px; }
 .calibrating-card i { width: 9px; height: 9px; border-radius: 50%; background: var(--amber); animation: pulse 1s infinite alternate; }
+.audio-setup-card { margin-top: auto; padding: 15px; border: 1px solid rgba(87,217,255,.22); border-radius: 14px; background: rgba(87,217,255,.045); }
+.audio-setup-card > div { display: flex; flex-direction: column; gap: 5px; margin-bottom: 13px; }
+.audio-setup-card strong { color: var(--cyan); font-size: 12px; }
+.audio-setup-card span { color: #868e88; font-size: 10px; line-height: 1.45; }
+.audio-setup-card .primary-button { margin: 0; }
+.audio-setup-card .sensor-error { margin: 10px 0 0; }
 .sensor-error { margin: -7px 0 0; color: #ff8a7d; font-size: 10px; line-height: 1.45; }
 .guidance-section { display: grid; grid-template-columns: .8fr 1.2fr; gap: 8vw; padding: clamp(70px, 9vw, 120px) 0; border-bottom: 1px solid var(--line); }
 .guidance-heading h2 { max-width: 390px; font-size: clamp(32px, 4vw, 58px); line-height: 1; }

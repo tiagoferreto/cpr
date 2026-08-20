@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 type SensorStatus =
   | "idle"
   | "requesting"
+  | "audio-ready"
   | "calibrating"
   | "active"
   | "paused"
@@ -24,6 +25,7 @@ const MAX_DEPTH = 6;
 const statusCopy: Record<SensorStatus, string> = {
   idle: "Pronto para treinar",
   requesting: "Aguardando permissão",
+  "audio-ready": "Ative o retorno sonoro",
   calibrating: "Calibrando sensor",
   active: "Sessão em andamento",
   paused: "Sessão pausada",
@@ -73,6 +75,22 @@ function createTone(context: AudioContext) {
   oscillator.stop(now + 0.06);
 }
 
+function speak(text: string) {
+  if (!("speechSynthesis" in window)) return false;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = "pt-BR";
+  utterance.rate = 1.06;
+  utterance.pitch = 1;
+  utterance.volume = 1;
+  const portugueseVoice = window.speechSynthesis
+    .getVoices()
+    .find((voice) => voice.lang.toLowerCase().startsWith("pt-br"));
+  if (portugueseVoice) utterance.voice = portugueseVoice;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+  return true;
+}
+
 export default function Home() {
   const [status, setStatus] = useState<SensorStatus>("idle");
   const [rate, setRate] = useState(0);
@@ -81,6 +99,7 @@ export default function Home() {
   const [elapsed, setElapsed] = useState(0);
   const [soundOn, setSoundOn] = useState(true);
   const [sensorError, setSensorError] = useState("");
+  const [audioError, setAudioError] = useState("");
 
   const statusRef = useRef<SensorStatus>("idle");
   const samplesRef = useRef<MotionSample[]>([]);
@@ -217,24 +236,21 @@ export default function Home() {
   useEffect(() => {
     if (status !== "active" || !soundOn || !("speechSynthesis" in window)) return;
     let prompt = "";
-    if (rateFeedback === "faster") prompt = "Aumente o ritmo";
-    else if (rateFeedback === "slower") prompt = "Diminua o ritmo";
+    if (rateFeedback === "faster") prompt = "Acelere as compressões";
+    else if (rateFeedback === "slower") prompt = "Diminua o ritmo das compressões";
     else if (rateFeedback === "good" && depthFeedback === "deeper") prompt = "Comprima mais fundo";
-    else if (rateFeedback === "good" && depthFeedback === "shallower") prompt = "Diminua a profundidade";
+    else if (rateFeedback === "good" && depthFeedback === "shallower") prompt = "Comprima menos fundo";
+    else if (rateFeedback === "good" && depthFeedback === "good") prompt = "Ritmo e profundidade adequados";
+    else if (rateFeedback === "good") prompt = "Ritmo adequado";
 
     if (!prompt) return;
     const now = performance.now();
     const last = lastAnnouncementRef.current;
-    if (now - last.time < 4_500 && last.text === prompt) return;
+    const repeatDelay = prompt.includes("adequado") ? 7_000 : 4_000;
+    if (now - last.time < repeatDelay && last.text === prompt) return;
     if (now - last.time < 2_500) return;
 
-    const utterance = new SpeechSynthesisUtterance(prompt);
-    utterance.lang = "pt-BR";
-    utterance.rate = 1.08;
-    utterance.volume = 0.85;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-    lastAnnouncementRef.current = { text: prompt, time: now };
+    if (speak(prompt)) lastAnnouncementRef.current = { text: prompt, time: now };
   }, [depthFeedback, rateFeedback, soundOn, status, rate, depth]);
 
   const resetMeasurements = () => {
@@ -250,27 +266,47 @@ export default function Home() {
   };
 
   const enableAudio = async () => {
+    setAudioError("");
     try {
       const AudioConstructor = window.AudioContext ||
         (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!AudioConstructor) {
         setSoundOn(false);
-        return;
+        setAudioError("Este navegador não oferece o sistema de áudio necessário.");
+        return false;
       }
       audioRef.current ??= new AudioConstructor();
       await audioRef.current.resume();
+      createTone(audioRef.current);
       setSoundOn(true);
+      return true;
     } catch {
       setSoundOn(false);
+      setAudioError("O navegador bloqueou o áudio. Aumente o volume e toque novamente em ativar áudio.");
+      return false;
     }
   };
 
   const toggleSound = async () => {
     if (soundOn) {
       setSoundOn(false);
+      window.speechSynthesis?.cancel();
       return;
     }
-    await enableAudio();
+    const enabled = await enableAudio();
+    if (enabled) speak("Áudio ativado");
+  };
+
+  const beginTrainingWithAudio = async () => {
+    const enabled = await enableAudio();
+    if (!enabled) return;
+    speak("Áudio ativado. Iniciando treinamento");
+    lastAnnouncementRef.current = { text: "", time: performance.now() };
+    updateStatus("calibrating");
+    window.setTimeout(() => {
+      sessionStartRef.current = performance.now();
+      updateStatus("active");
+    }, 1_800);
   };
 
   const startSession = async () => {
@@ -295,12 +331,8 @@ export default function Home() {
       }
 
       resetMeasurements();
-      updateStatus("calibrating");
-      void enableAudio();
-      window.setTimeout(() => {
-        sessionStartRef.current = performance.now();
-        updateStatus("active");
-      }, 1_800);
+      setAudioError("");
+      updateStatus("audio-ready");
     } catch (error) {
       const message = error instanceof Error && error.name === "NotAllowedError"
         ? "O navegador bloqueou a solicitação. Abra a página diretamente no Safari ou Chrome e toque novamente."
@@ -326,7 +358,7 @@ export default function Home() {
     sessionStartRef.current = performance.now();
   };
 
-  const sessionStarted = status === "active" || status === "paused" || status === "calibrating";
+  const sessionStarted = status === "active" || status === "paused" || status === "calibrating" || status === "audio-ready";
   const rateProgress = rate ? Math.min(100, Math.max(0, ((rate - 70) / 80) * 100)) : 0;
   const depthMarker = depth ? Math.min(100, Math.max(0, (depth / 8) * 100)) : 0;
 
@@ -438,6 +470,18 @@ export default function Home() {
               <span>{status === "requesting" ? "Solicitando acesso…" : status === "denied" ? "Tentar novamente" : "Iniciar treinamento"}</span>
               <b aria-hidden="true">→</b>
             </button>
+          ) : status === "audio-ready" ? (
+            <div className="audio-setup-card" role="group" aria-label="Ativação do retorno sonoro">
+              <div>
+                <strong>Ative o áudio antes de posicionar as mãos</strong>
+                <span>Você ouvirá um teste e depois receberá instruções por voz durante a sessão.</span>
+              </div>
+              <button className="primary-button" onClick={beginTrainingWithAudio}>
+                <span>Ativar áudio e começar</span>
+                <b aria-hidden="true">◖))</b>
+              </button>
+              {audioError && <p className="sensor-error">{audioError}</p>}
+            </div>
           ) : status === "calibrating" ? (
             <div className="calibrating-card" role="status">
               <i /><span>Mantenha o aparelho imóvel por um instante…</span>
