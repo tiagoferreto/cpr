@@ -1,156 +1,189 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-type AxisSample = {
-  time: number;
-  x: number;
-  y: number;
-  z: number;
-};
+type SensorStatus =
+  | "idle"
+  | "requesting"
+  | "calibrating"
+  | "active"
+  | "paused"
+  | "denied"
+  | "unsupported";
 
-type SensorStatus = "idle" | "requesting" | "active" | "paused" | "denied" | "unsupported";
+type RateFeedback = "waiting" | "good" | "faster" | "slower";
+type DepthFeedback = "waiting" | "good" | "deeper" | "shallower";
+type MotionSample = { time: number; vertical: number };
 
-const WINDOW_MS = 12_000;
-const AXES = [
-  { key: "x" as const, label: "Eixo X", color: "#c9ff57" },
-  { key: "y" as const, label: "Eixo Y", color: "#57d9ff" },
-  { key: "z" as const, label: "Eixo Z", color: "#c78bff" },
-];
+const TARGET_RATE = 110;
+const MIN_RATE = 100;
+const MAX_RATE = 120;
+const MIN_DEPTH = 5;
+const MAX_DEPTH = 6;
 
 const statusCopy: Record<SensorStatus, string> = {
-  idle: "Pronto para começar",
+  idle: "Pronto para treinar",
   requesting: "Aguardando permissão",
-  active: "Leitura em tempo real",
-  paused: "Leitura pausada",
+  calibrating: "Calibrando sensor",
+  active: "Sessão em andamento",
+  paused: "Sessão pausada",
   denied: "Acesso não autorizado",
   unsupported: "Sensor indisponível",
 };
 
-function formatValue(value: number) {
-  return new Intl.NumberFormat("pt-BR", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
+const rateCopy: Record<RateFeedback, { title: string; detail: string }> = {
+  waiting: { title: "Aguardando compressões", detail: "Comece acompanhando o pulso sonoro" },
+  good: { title: "Ritmo adequado", detail: "Mantenha esta cadência" },
+  faster: { title: "Aumente o ritmo", detail: "Comprima um pouco mais rápido" },
+  slower: { title: "Diminua o ritmo", detail: "Comprima um pouco mais devagar" },
+};
+
+const depthCopy: Record<DepthFeedback, string> = {
+  waiting: "Aguardando leitura",
+  good: "Faixa estimada adequada",
+  deeper: "Aumente a profundidade",
+  shallower: "Diminua a profundidade",
+};
+
+function median(values: number[]) {
+  if (!values.length) return 0;
+  const ordered = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(ordered.length / 2);
+  return ordered.length % 2 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2;
 }
 
-function drawChart(canvas: HTMLCanvasElement, samples: AxisSample[], now: number) {
-  const rect = canvas.getBoundingClientRect();
-  if (!rect.width || !rect.height) return;
+function formatTime(seconds: number) {
+  const minutes = Math.floor(seconds / 60).toString().padStart(2, "0");
+  const rest = Math.floor(seconds % 60).toString().padStart(2, "0");
+  return `${minutes}:${rest}`;
+}
 
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const width = rect.width;
-  const height = rect.height;
-  canvas.width = Math.round(width * dpr);
-  canvas.height = Math.round(height * dpr);
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, width, height);
-
-  const pad = { top: 18, right: 18, bottom: 32, left: 48 };
-  const plotW = width - pad.left - pad.right;
-  const plotH = height - pad.top - pad.bottom;
-  const visible = samples.filter((sample) => sample.time >= now - WINDOW_MS);
-  const maxSeen = visible.reduce(
-    (max, sample) => Math.max(max, Math.abs(sample.x), Math.abs(sample.y), Math.abs(sample.z)),
-    0,
-  );
-  const limit = Math.max(12, Math.ceil(maxSeen / 5) * 5);
-
-  ctx.font = "11px var(--font-geist-mono), monospace";
-  ctx.textBaseline = "middle";
-  ctx.lineWidth = 1;
-
-  for (let i = 0; i <= 4; i += 1) {
-    const y = pad.top + (plotH * i) / 4;
-    const value = limit - (limit * 2 * i) / 4;
-    ctx.strokeStyle = i === 2 ? "rgba(255,255,255,.22)" : "rgba(255,255,255,.085)";
-    ctx.beginPath();
-    ctx.moveTo(pad.left, y);
-    ctx.lineTo(width - pad.right, y);
-    ctx.stroke();
-    ctx.fillStyle = "rgba(229,232,225,.52)";
-    ctx.textAlign = "right";
-    ctx.fillText(String(value), pad.left - 10, y);
-  }
-
-  for (let i = 0; i <= 4; i += 1) {
-    const x = pad.left + (plotW * i) / 4;
-    ctx.strokeStyle = "rgba(255,255,255,.055)";
-    ctx.beginPath();
-    ctx.moveTo(x, pad.top);
-    ctx.lineTo(x, height - pad.bottom);
-    ctx.stroke();
-    ctx.fillStyle = "rgba(229,232,225,.46)";
-    ctx.textAlign = i === 0 ? "left" : i === 4 ? "right" : "center";
-    ctx.fillText(`${Math.round(-12 + i * 3)}s`, x, height - 13);
-  }
-
-  const xFor = (time: number) => pad.left + ((time - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
-  const yFor = (value: number) => pad.top + ((limit - value) / (limit * 2)) * plotH;
-
-  AXES.forEach((axis) => {
-    ctx.strokeStyle = axis.color;
-    ctx.lineWidth = 2.25;
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    ctx.shadowColor = axis.color;
-    ctx.shadowBlur = 7;
-    ctx.beginPath();
-    visible.forEach((sample, index) => {
-      const x = xFor(sample.time);
-      const y = yFor(sample[axis.key]);
-      if (index === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-  });
+function createTone(context: AudioContext) {
+  const now = context.currentTime;
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = "sine";
+  oscillator.frequency.setValueAtTime(880, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.16, now + 0.006);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.055);
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start(now);
+  oscillator.stop(now + 0.06);
 }
 
 export default function Home() {
   const [status, setStatus] = useState<SensorStatus>("idle");
-  const [values, setValues] = useState({ x: 0, y: 0, z: 0 });
-  const [frequency, setFrequency] = useState(0);
-  const [sampleCount, setSampleCount] = useState(0);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const samplesRef = useRef<AxisSample[]>([]);
+  const [rate, setRate] = useState(0);
+  const [depth, setDepth] = useState(0);
+  const [compressions, setCompressions] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+  const [soundOn, setSoundOn] = useState(true);
+
   const statusRef = useRef<SensorStatus>("idle");
-  const latestTimeRef = useRef(0);
-  const lastUiUpdateRef = useRef(0);
+  const samplesRef = useRef<MotionSample[]>([]);
+  const gravityRef = useRef({ x: 0, y: 0, z: 9.81 });
+  const peakWindowRef = useRef<{ time: number; value: number }[]>([]);
+  const compressionTimesRef = useRef<number[]>([]);
+  const lastPeakRef = useRef(0);
+  const sessionStartRef = useRef(0);
+  const accumulatedRef = useRef(0);
+  const audioRef = useRef<AudioContext | null>(null);
+  const lastAnnouncementRef = useRef({ text: "", time: 0 });
 
   const updateStatus = useCallback((next: SensorStatus) => {
     statusRef.current = next;
     setStatus(next);
   }, []);
 
-  const handleMotion = useCallback((event: DeviceMotionEvent) => {
-    if (statusRef.current !== "active") return;
+  const rateFeedback = useMemo<RateFeedback>(() => {
+    if (!rate) return "waiting";
+    if (rate < MIN_RATE) return "faster";
+    if (rate > MAX_RATE) return "slower";
+    return "good";
+  }, [rate]);
 
-    const acceleration = event.accelerationIncludingGravity ?? event.acceleration;
-    if (!acceleration) return;
+  const depthFeedback = useMemo<DepthFeedback>(() => {
+    if (!depth) return "waiting";
+    if (depth < MIN_DEPTH) return "deeper";
+    if (depth > MAX_DEPTH) return "shallower";
+    return "good";
+  }, [depth]);
 
-    const now = performance.now();
-    const next = {
-      time: now,
-      x: acceleration.x ?? 0,
-      y: acceleration.y ?? 0,
-      z: acceleration.z ?? 0,
-    };
-
-    samplesRef.current.push(next);
-    samplesRef.current = samplesRef.current.filter((sample) => sample.time >= now - WINDOW_MS - 1_000);
-    latestTimeRef.current = now;
-
-    if (now - lastUiUpdateRef.current > 90) {
-      setValues({ x: next.x, y: next.y, z: next.z });
-      setSampleCount((count) => count + 1);
-      setFrequency(event.interval ? Math.round(1000 / event.interval) : 0);
-      lastUiUpdateRef.current = now;
-    }
+  const estimateDepth = useCallback((bpm: number, now: number) => {
+    const windowSamples = samplesRef.current.filter((sample) => sample.time >= now - 1_600);
+    if (windowSamples.length < 12 || bpm < 70) return 0;
+    const mean = windowSamples.reduce((sum, sample) => sum + sample.vertical, 0) / windowSamples.length;
+    const rms = Math.sqrt(
+      windowSamples.reduce((sum, sample) => sum + (sample.vertical - mean) ** 2, 0) /
+        windowSamples.length,
+    );
+    const angularFrequency = 2 * Math.PI * (bpm / 60);
+    const estimatedCm = (2 * rms * Math.SQRT2 * 100) / (angularFrequency ** 2);
+    return Math.min(8.5, Math.max(0, estimatedCm));
   }, []);
+
+  const registerCompression = useCallback((now: number) => {
+    const times = compressionTimesRef.current.filter((time) => now - time < 5_000);
+    times.push(now);
+    compressionTimesRef.current = times.slice(-9);
+    lastPeakRef.current = now;
+    setCompressions((value) => value + 1);
+
+    if (times.length < 3) return;
+    const intervals = times.slice(1).map((time, index) => time - times[index]);
+    const validIntervals = intervals.filter((interval) => interval >= 300 && interval <= 950);
+    if (validIntervals.length < 2) return;
+    const nextRate = Math.round(60_000 / median(validIntervals));
+    setRate((current) => current ? Math.round(current * 0.55 + nextRate * 0.45) : nextRate);
+    const nextDepth = estimateDepth(nextRate, now);
+    if (nextDepth) {
+      setDepth((current) => current ? current * 0.62 + nextDepth * 0.38 : nextDepth);
+    }
+  }, [estimateDepth]);
+
+  const handleMotion = useCallback((event: DeviceMotionEvent) => {
+    if (statusRef.current !== "active" && statusRef.current !== "calibrating") return;
+    const includingGravity = event.accelerationIncludingGravity;
+    if (!includingGravity) return;
+
+    const alpha = statusRef.current === "calibrating" ? 0.82 : 0.965;
+    const previousGravity = gravityRef.current;
+    const gravity = {
+      x: alpha * previousGravity.x + (1 - alpha) * (includingGravity.x ?? 0),
+      y: alpha * previousGravity.y + (1 - alpha) * (includingGravity.y ?? 0),
+      z: alpha * previousGravity.z + (1 - alpha) * (includingGravity.z ?? 0),
+    };
+    gravityRef.current = gravity;
+    if (statusRef.current === "calibrating") return;
+
+    const direct = event.acceleration;
+    const linear = direct && direct.x !== null
+      ? { x: direct.x ?? 0, y: direct.y ?? 0, z: direct.z ?? 0 }
+      : {
+          x: (includingGravity.x ?? 0) - gravity.x,
+          y: (includingGravity.y ?? 0) - gravity.y,
+          z: (includingGravity.z ?? 0) - gravity.z,
+        };
+    const gravityMagnitude = Math.hypot(gravity.x, gravity.y, gravity.z) || 9.81;
+    const vertical =
+      (linear.x * gravity.x + linear.y * gravity.y + linear.z * gravity.z) /
+      gravityMagnitude;
+    const now = performance.now();
+
+    samplesRef.current.push({ time: now, vertical });
+    samplesRef.current = samplesRef.current.filter((sample) => sample.time >= now - 2_200);
+
+    const window = peakWindowRef.current;
+    window.push({ time: now, value: Math.abs(vertical) });
+    peakWindowRef.current = window.slice(-3);
+    if (peakWindowRef.current.length < 3) return;
+
+    const [first, middle, last] = peakWindowRef.current;
+    const isPeak = middle.value > 1.1 && middle.value > first.value && middle.value >= last.value;
+    if (isPeak && middle.time - lastPeakRef.current > 340) registerCompression(middle.time);
+  }, [registerCompression]);
 
   useEffect(() => {
     window.addEventListener("devicemotion", handleMotion);
@@ -158,33 +191,81 @@ export default function Home() {
   }, [handleMotion]);
 
   useEffect(() => {
-    let frame = 0;
-    const render = () => {
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const now = statusRef.current === "paused" && latestTimeRef.current
-          ? latestTimeRef.current
-          : performance.now();
-        drawChart(canvas, samplesRef.current, now);
+    const timer = window.setInterval(() => {
+      if (statusRef.current === "active") {
+        setElapsed(accumulatedRef.current + (performance.now() - sessionStartRef.current) / 1000);
+        if (lastPeakRef.current && performance.now() - lastPeakRef.current > 1_600) {
+          setRate(0);
+          setDepth(0);
+          compressionTimesRef.current = [];
+        }
       }
-      frame = requestAnimationFrame(render);
-    };
-    frame = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(frame);
+    }, 250);
+    return () => window.clearInterval(timer);
   }, []);
 
-  const startSensor = async () => {
+  useEffect(() => {
+    if (status !== "active" || !soundOn) return;
+    const context = audioRef.current;
+    if (!context) return;
+    createTone(context);
+    const metronome = window.setInterval(() => createTone(context), 60_000 / TARGET_RATE);
+    return () => window.clearInterval(metronome);
+  }, [status, soundOn]);
+
+  useEffect(() => {
+    if (status !== "active" || !soundOn || !("speechSynthesis" in window)) return;
+    let prompt = "";
+    if (rateFeedback === "faster") prompt = "Aumente o ritmo";
+    else if (rateFeedback === "slower") prompt = "Diminua o ritmo";
+    else if (rateFeedback === "good" && depthFeedback === "deeper") prompt = "Comprima mais fundo";
+    else if (rateFeedback === "good" && depthFeedback === "shallower") prompt = "Diminua a profundidade";
+
+    if (!prompt) return;
+    const now = performance.now();
+    const last = lastAnnouncementRef.current;
+    if (now - last.time < 4_500 && last.text === prompt) return;
+    if (now - last.time < 2_500) return;
+
+    const utterance = new SpeechSynthesisUtterance(prompt);
+    utterance.lang = "pt-BR";
+    utterance.rate = 1.08;
+    utterance.volume = 0.85;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+    lastAnnouncementRef.current = { text: prompt, time: now };
+  }, [depthFeedback, rateFeedback, soundOn, status, rate, depth]);
+
+  const resetMeasurements = () => {
+    samplesRef.current = [];
+    peakWindowRef.current = [];
+    compressionTimesRef.current = [];
+    lastPeakRef.current = 0;
+    setRate(0);
+    setDepth(0);
+    setCompressions(0);
+    setElapsed(0);
+    accumulatedRef.current = 0;
+  };
+
+  const startSession = async () => {
     if (!("DeviceMotionEvent" in window)) {
       updateStatus("unsupported");
       return;
     }
-
     updateStatus("requesting");
+
     try {
+      const AudioConstructor = window.AudioContext ||
+        (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (AudioConstructor) {
+        audioRef.current ??= new AudioConstructor();
+        await audioRef.current.resume();
+      }
+
       const MotionEvent = DeviceMotionEvent as typeof DeviceMotionEvent & {
         requestPermission?: () => Promise<"granted" | "denied">;
       };
-
       if (typeof MotionEvent.requestPermission === "function") {
         const permission = await MotionEvent.requestPermission();
         if (permission !== "granted") {
@@ -192,32 +273,44 @@ export default function Home() {
           return;
         }
       }
-      updateStatus("active");
+
+      resetMeasurements();
+      updateStatus("calibrating");
+      window.setTimeout(() => {
+        sessionStartRef.current = performance.now();
+        updateStatus("active");
+      }, 1_800);
     } catch {
       updateStatus("denied");
     }
   };
 
   const togglePause = () => {
-    if (status === "active") updateStatus("paused");
-    else if (status === "paused") updateStatus("active");
+    if (status === "active") {
+      accumulatedRef.current += (performance.now() - sessionStartRef.current) / 1000;
+      updateStatus("paused");
+      window.speechSynthesis?.cancel();
+    } else if (status === "paused") {
+      sessionStartRef.current = performance.now();
+      updateStatus("active");
+    }
   };
 
-  const clearChart = () => {
-    samplesRef.current = [];
-    latestTimeRef.current = 0;
-    setValues({ x: 0, y: 0, z: 0 });
-    setSampleCount(0);
+  const resetSession = () => {
+    resetMeasurements();
+    sessionStartRef.current = performance.now();
   };
 
-  const isRunning = status === "active" || status === "paused";
+  const sessionStarted = status === "active" || status === "paused" || status === "calibrating";
+  const rateProgress = rate ? Math.min(100, Math.max(0, ((rate - 70) / 80) * 100)) : 0;
+  const depthMarker = depth ? Math.min(100, Math.max(0, (depth / 8) * 100)) : 0;
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="#top" aria-label="Acelera — início">
-          <span className="brand-mark" aria-hidden="true">A</span>
-          <span>Acelera</span>
+      <header className="topbar" id="top">
+        <a className="brand" href="#top" aria-label="Pulso — início">
+          <span className="brand-mark" aria-hidden="true">P</span>
+          <span>Pulso</span>
         </a>
         <div className={`status-pill status-${status}`} role="status" aria-live="polite">
           <span className="status-dot" />
@@ -225,100 +318,151 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="hero" id="top">
+      <section className="hero">
         <div>
-          <p className="eyebrow">Laboratório de movimento</p>
-          <h1>Seu movimento,<br /><span>traçado ao vivo.</span></h1>
+          <p className="eyebrow">Treinamento de RCP · adulto</p>
+          <h1>Compressões no<br /><span>ritmo certo.</span></h1>
         </div>
         <p className="hero-copy">
-          Acompanhe a aceleração do dispositivo nos três eixos. Os valores são processados
-          somente nesta tela e não são enviados para nenhum servidor.
+          Feedback audiovisual de cadência e estimativa experimental de profundidade usando
+          o sensor de movimento do celular.
         </p>
       </section>
 
-      <section className="dashboard" aria-label="Painel do acelerômetro">
-        <div className="chart-panel">
-          <div className="panel-heading">
+      <aside className="emergency-banner" role="note">
+        <div className="emergency-symbol" aria-hidden="true">!</div>
+        <div>
+          <strong>Em uma emergência real, ligue 192 primeiro.</strong>
+          <span> Siga as orientações do SAMU e use um DEA assim que disponível. Não atrase as compressões para posicionar o celular.</span>
+        </div>
+        <a href="tel:192">Ligar 192</a>
+      </aside>
+
+      <section className={`cpr-dashboard feedback-${rateFeedback}`} aria-label="Feedback de compressões torácicas">
+        <div className="feedback-stage">
+          <div className="stage-heading">
             <div>
-              <p className="panel-kicker">Aceleração incluindo gravidade</p>
-              <h2>Intensidade por eixo</h2>
+              <p className="panel-kicker">Cadência detectada</p>
+              <h2>Ritmo das compressões</h2>
             </div>
-            <div className="legend" aria-label="Legenda dos eixos">
-              {AXES.map((axis) => (
-                <span key={axis.key}><i style={{ background: axis.color }} />{axis.key.toUpperCase()}</span>
-              ))}
-            </div>
+            <button
+              className={`sound-toggle ${soundOn ? "is-on" : ""}`}
+              type="button"
+              onClick={() => setSoundOn((value) => !value)}
+              aria-pressed={soundOn}
+            >
+              <span aria-hidden="true">{soundOn ? "◖))" : "◖×"}</span>
+              Som {soundOn ? "ligado" : "desligado"}
+            </button>
           </div>
 
-          <div className="chart-wrap">
-            <canvas ref={canvasRef} aria-label="Gráfico em tempo real dos eixos X, Y e Z" />
-            {!isRunning && (
-              <div className="chart-empty">
-                <span className="signal-icon" aria-hidden="true"><i /><i /><i /></span>
-                <strong>{status === "denied" ? "Permissão necessária" : status === "unsupported" ? "Sensor não encontrado" : "Aguardando o sensor"}</strong>
-                <small>
-                  {status === "denied"
-                    ? "Autorize o acesso a movimento nas configurações do navegador e tente novamente."
-                    : status === "unsupported"
-                      ? "Abra esta página em um celular compatível usando uma conexão segura."
-                      : "Toque em “Iniciar leitura” e movimente o celular."}
-                </small>
+          <div className="rate-visual" style={{ "--rate-progress": `${rateProgress}%` } as React.CSSProperties}>
+            <div className="rate-ring">
+              <div className="rate-number">
+                <strong>{rate || "—"}</strong>
+                <span>compressões/min</span>
               </div>
-            )}
+            </div>
           </div>
 
-          <div className="chart-footer">
-            <span>Janela de 12 segundos</span>
-            <span>Escala automática · m/s²</span>
+          <div className="live-feedback" role="status" aria-live="assertive">
+            <span className="feedback-icon" aria-hidden="true">
+              {rateFeedback === "good" ? "✓" : rateFeedback === "faster" ? "↑" : rateFeedback === "slower" ? "↓" : "·"}
+            </span>
+            <div>
+              <strong>{rateCopy[rateFeedback].title}</strong>
+              <span>{rateCopy[rateFeedback].detail}</span>
+            </div>
+          </div>
+
+          <div className="target-scale" aria-label="Faixa alvo entre 100 e 120 compressões por minuto">
+            <span>80</span><span>100</span><i /><span>120</span><span>140</span>
           </div>
         </div>
 
-        <aside className="side-panel">
-          <div className="axis-list">
-            {AXES.map((axis) => (
-              <div className="axis-row" key={axis.key}>
-                <div className="axis-name">
-                  <span style={{ color: axis.color }}>{axis.key.toUpperCase()}</span>
-                  <small>{axis.label}</small>
-                </div>
-                <div className="axis-value">
-                  <strong>{formatValue(values[axis.key])}</strong>
-                  <small>m/s²</small>
-                </div>
-              </div>
-            ))}
+        <aside className="session-panel">
+          <div className="session-stats">
+            <div><span>Tempo</span><strong>{formatTime(elapsed)}</strong></div>
+            <div><span>Compressões</span><strong>{compressions}</strong></div>
           </div>
 
-          <div className="metrics">
-            <div><span>Taxa</span><strong>{frequency || "—"} <small>{frequency ? "Hz" : ""}</small></strong></div>
-            <div><span>Amostras</span><strong>{sampleCount}</strong></div>
+          <div className={`depth-card depth-${depthFeedback}`}>
+            <div className="card-label">
+              <span>Profundidade estimada</span>
+              <b>Experimental</b>
+            </div>
+            <div className="depth-reading">
+              <strong>{depth ? depth.toFixed(1).replace(".", ",") : "—"}</strong>
+              <span>cm</span>
+            </div>
+            <div className="depth-track" aria-label="Alvo estimado entre 5 e 6 centímetros">
+              <i className="depth-target" />
+              {depth > 0 && <i className="depth-marker" style={{ left: `${depthMarker}%` }} />}
+            </div>
+            <div className="depth-labels"><span>0</span><span>alvo 5–6 cm</span><span>8</span></div>
+            <p>{depthCopy[depthFeedback]}</p>
           </div>
 
-          {!isRunning ? (
-            <button className="primary-button" onClick={startSensor} disabled={status === "requesting"}>
-              <span>{status === "requesting" ? "Solicitando…" : status === "denied" ? "Tentar novamente" : "Iniciar leitura"}</span>
+          <div className="target-card">
+            <div><span>Ritmo recomendado</span><strong>100–120 <small>/min</small></strong></div>
+            <div><span>Profundidade no adulto</span><strong>5–6 <small>cm</small></strong></div>
+          </div>
+
+          {!sessionStarted ? (
+            <button className="primary-button" onClick={startSession} disabled={status === "requesting"}>
+              <span>{status === "requesting" ? "Solicitando acesso…" : status === "denied" ? "Tentar novamente" : "Iniciar treinamento"}</span>
               <b aria-hidden="true">→</b>
             </button>
+          ) : status === "calibrating" ? (
+            <div className="calibrating-card" role="status">
+              <i /><span>Mantenha o aparelho imóvel por um instante…</span>
+            </div>
           ) : (
             <div className="control-row">
               <button className="primary-button" onClick={togglePause}>
                 <span>{status === "paused" ? "Continuar" : "Pausar"}</span>
                 <b aria-hidden="true">{status === "paused" ? "▶" : "Ⅱ"}</b>
               </button>
-              <button className="icon-button" onClick={clearChart} aria-label="Limpar gráfico" title="Limpar gráfico">↺</button>
+              <button className="icon-button" onClick={resetSession} aria-label="Reiniciar sessão" title="Reiniciar sessão">↺</button>
             </div>
           )}
 
-          <p className="permission-note">
-            <span aria-hidden="true">⌁</span>
-            No iPhone, o navegador pedirá sua autorização após o toque no botão.
-          </p>
+          {(status === "denied" || status === "unsupported") && (
+            <p className="sensor-error">
+              {status === "denied"
+                ? "Autorize o acesso a movimento nas configurações do navegador."
+                : "Este navegador ou dispositivo não oferece os dados de movimento necessários."}
+            </p>
+          )}
         </aside>
       </section>
 
+      <section className="guidance-section" aria-labelledby="guidance-title">
+        <div className="guidance-heading">
+          <p className="eyebrow">Antes de começar</p>
+          <h2 id="guidance-title">Use como apoio de treinamento.</h2>
+        </div>
+        <div className="guidance-list">
+          <article><b>01</b><div><strong>Priorize o socorro</strong><p>Em uma emergência, acione o SAMU 192, peça um DEA e siga as orientações do atendente.</p></div></article>
+          <article><b>02</b><div><strong>Treine em superfície firme</strong><p>Posicione o celular sobre um manequim de RCP, mantenha-o estável e toque em iniciar.</p></div></article>
+          <article><b>03</b><div><strong>Não confunda profundidade com pressão</strong><p>O aparelho estima deslocamento pelo acelerômetro; não mede força e pode errar com inclinação, colchões ou movimento do corpo.</p></div></article>
+        </div>
+      </section>
+
+      <aside className="medical-note">
+        <strong>Limitação clínica</strong>
+        <p>
+          Protótipo educacional não validado como dispositivo médico. A medição de cadência tende a ser mais robusta;
+          a profundidade é uma aproximação matemática e não deve orientar atendimento real. Para formação, procure um curso de RCP com manequim e dispositivo de feedback validado.
+        </p>
+      </aside>
+
       <footer>
-        <span>Dados locais · nenhuma gravação</span>
-        <span>Compatível com navegadores móveis modernos</span>
+        <span>Dados processados somente no dispositivo</span>
+        <nav aria-label="Fontes">
+          <a href="https://cpr.heart.org/en/resuscitation-science/cpr-and-ecc-guidelines/adult-basic-life-support" target="_blank" rel="noreferrer">AHA 2025</a>
+          <a href="https://www.gov.br/saude/pt-br/composicao/saes/samu-192" target="_blank" rel="noreferrer">SAMU 192</a>
+        </nav>
       </footer>
     </main>
   );
