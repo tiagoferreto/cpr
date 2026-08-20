@@ -80,6 +80,7 @@ export default function Home() {
   const [compressions, setCompressions] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [soundOn, setSoundOn] = useState(true);
+  const [sensorError, setSensorError] = useState("");
 
   const statusRef = useRef<SensorStatus>("idle");
   const samplesRef = useRef<MotionSample[]>([]);
@@ -248,27 +249,46 @@ export default function Home() {
     accumulatedRef.current = 0;
   };
 
+  const enableAudio = async () => {
+    try {
+      const AudioConstructor = window.AudioContext ||
+        (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioConstructor) {
+        setSoundOn(false);
+        return;
+      }
+      audioRef.current ??= new AudioConstructor();
+      await audioRef.current.resume();
+      setSoundOn(true);
+    } catch {
+      setSoundOn(false);
+    }
+  };
+
+  const toggleSound = async () => {
+    if (soundOn) {
+      setSoundOn(false);
+      return;
+    }
+    await enableAudio();
+  };
+
   const startSession = async () => {
     if (!("DeviceMotionEvent" in window)) {
       updateStatus("unsupported");
       return;
     }
     updateStatus("requesting");
+    setSensorError("");
 
     try {
-      const AudioConstructor = window.AudioContext ||
-        (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (AudioConstructor) {
-        audioRef.current ??= new AudioConstructor();
-        await audioRef.current.resume();
-      }
-
       const MotionEvent = DeviceMotionEvent as typeof DeviceMotionEvent & {
         requestPermission?: () => Promise<"granted" | "denied">;
       };
       if (typeof MotionEvent.requestPermission === "function") {
         const permission = await MotionEvent.requestPermission();
         if (permission !== "granted") {
+          setSensorError("O navegador recusou o acesso. Redefina a permissão de movimento deste site e tente novamente.");
           updateStatus("denied");
           return;
         }
@@ -276,11 +296,16 @@ export default function Home() {
 
       resetMeasurements();
       updateStatus("calibrating");
+      void enableAudio();
       window.setTimeout(() => {
         sessionStartRef.current = performance.now();
         updateStatus("active");
       }, 1_800);
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error && error.name === "NotAllowedError"
+        ? "O navegador bloqueou a solicitação. Abra a página diretamente no Safari ou Chrome e toque novamente."
+        : "Não foi possível solicitar o sensor de movimento neste navegador.";
+      setSensorError(message);
       updateStatus("denied");
     }
   };
@@ -348,7 +373,7 @@ export default function Home() {
             <button
               className={`sound-toggle ${soundOn ? "is-on" : ""}`}
               type="button"
-              onClick={() => setSoundOn((value) => !value)}
+              onClick={toggleSound}
               aria-pressed={soundOn}
             >
               <span aria-hidden="true">{soundOn ? "◖))" : "◖×"}</span>
@@ -430,7 +455,7 @@ export default function Home() {
           {(status === "denied" || status === "unsupported") && (
             <p className="sensor-error">
               {status === "denied"
-                ? "Autorize o acesso a movimento nas configurações do navegador."
+                ? sensorError || "Autorize o acesso a movimento nas configurações do navegador."
                 : "Este navegador ou dispositivo não oferece os dados de movimento necessários."}
             </p>
           )}
