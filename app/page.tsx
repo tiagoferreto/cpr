@@ -15,12 +15,23 @@ type SensorStatus =
 type RateFeedback = "waiting" | "good" | "faster" | "slower";
 type DepthFeedback = "waiting" | "good" | "deeper" | "shallower";
 type MotionSample = { time: number; vertical: number };
+type VoicePrompt = "audio-ready" | "faster" | "slower" | "deeper" | "shallower" | "good" | "rhythm-good";
 
 const TARGET_RATE = 110;
 const MIN_RATE = 100;
 const MAX_RATE = 120;
 const MIN_DEPTH = 5;
 const MAX_DEPTH = 6;
+
+const VOICE_FILES: Record<VoicePrompt, string> = {
+  "audio-ready": "/audio/audio-ready.wav",
+  faster: "/audio/faster.wav",
+  slower: "/audio/slower.wav",
+  deeper: "/audio/deeper.wav",
+  shallower: "/audio/shallower.wav",
+  good: "/audio/good.wav",
+  "rhythm-good": "/audio/rhythm-good.wav",
+};
 
 const statusCopy: Record<SensorStatus, string> = {
   idle: "Pronto para treinar",
@@ -75,22 +86,6 @@ function createTone(context: AudioContext) {
   oscillator.stop(now + 0.06);
 }
 
-function speak(text: string) {
-  if (!("speechSynthesis" in window)) return false;
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = "pt-BR";
-  utterance.rate = 1.06;
-  utterance.pitch = 1;
-  utterance.volume = 1;
-  const portugueseVoice = window.speechSynthesis
-    .getVoices()
-    .find((voice) => voice.lang.toLowerCase().startsWith("pt-br"));
-  if (portugueseVoice) utterance.voice = portugueseVoice;
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(utterance);
-  return true;
-}
-
 export default function Home() {
   const [status, setStatus] = useState<SensorStatus>("idle");
   const [rate, setRate] = useState(0);
@@ -110,11 +105,39 @@ export default function Home() {
   const sessionStartRef = useRef(0);
   const accumulatedRef = useRef(0);
   const audioRef = useRef<AudioContext | null>(null);
+  const voiceBuffersRef = useRef<Partial<Record<VoicePrompt, AudioBuffer>>>({});
+  const voiceSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const voiceUntilRef = useRef(0);
   const lastAnnouncementRef = useRef({ text: "", time: 0 });
 
   const updateStatus = useCallback((next: SensorStatus) => {
     statusRef.current = next;
     setStatus(next);
+  }, []);
+
+  const playVoice = useCallback((prompt: VoicePrompt) => {
+    const context = audioRef.current;
+    const buffer = voiceBuffersRef.current[prompt];
+    if (!context || !buffer || context.state !== "running") return false;
+
+    try {
+      voiceSourceRef.current?.stop();
+    } catch {
+      // The previous message may already have finished.
+    }
+    const source = context.createBufferSource();
+    const gain = context.createGain();
+    source.buffer = buffer;
+    gain.gain.value = 1;
+    source.connect(gain);
+    gain.connect(context.destination);
+    source.start();
+    voiceSourceRef.current = source;
+    voiceUntilRef.current = performance.now() + buffer.duration * 1_000 + 250;
+    source.onended = () => {
+      if (voiceSourceRef.current === source) voiceSourceRef.current = null;
+    };
+    return true;
   }, []);
 
   const rateFeedback = useMemo<RateFeedback>(() => {
@@ -228,30 +251,33 @@ export default function Home() {
     if (status !== "active" || !soundOn) return;
     const context = audioRef.current;
     if (!context) return;
-    createTone(context);
-    const metronome = window.setInterval(() => createTone(context), 60_000 / TARGET_RATE);
+    const tick = () => {
+      if (performance.now() >= voiceUntilRef.current) createTone(context);
+    };
+    tick();
+    const metronome = window.setInterval(tick, 60_000 / TARGET_RATE);
     return () => window.clearInterval(metronome);
   }, [status, soundOn]);
 
   useEffect(() => {
-    if (status !== "active" || !soundOn || !("speechSynthesis" in window)) return;
-    let prompt = "";
-    if (rateFeedback === "faster") prompt = "Acelere as compressões";
-    else if (rateFeedback === "slower") prompt = "Diminua o ritmo das compressões";
-    else if (rateFeedback === "good" && depthFeedback === "deeper") prompt = "Comprima mais fundo";
-    else if (rateFeedback === "good" && depthFeedback === "shallower") prompt = "Comprima menos fundo";
-    else if (rateFeedback === "good" && depthFeedback === "good") prompt = "Ritmo e profundidade adequados";
-    else if (rateFeedback === "good") prompt = "Ritmo adequado";
+    if (status !== "active" || !soundOn) return;
+    let prompt: VoicePrompt | null = null;
+    if (rateFeedback === "faster") prompt = "faster";
+    else if (rateFeedback === "slower") prompt = "slower";
+    else if (rateFeedback === "good" && depthFeedback === "deeper") prompt = "deeper";
+    else if (rateFeedback === "good" && depthFeedback === "shallower") prompt = "shallower";
+    else if (rateFeedback === "good" && depthFeedback === "good") prompt = "good";
+    else if (rateFeedback === "good") prompt = "rhythm-good";
 
     if (!prompt) return;
     const now = performance.now();
     const last = lastAnnouncementRef.current;
-    const repeatDelay = prompt.includes("adequado") ? 7_000 : 4_000;
+    const repeatDelay = prompt === "good" || prompt === "rhythm-good" ? 7_000 : 4_000;
     if (now - last.time < repeatDelay && last.text === prompt) return;
     if (now - last.time < 2_500) return;
 
-    if (speak(prompt)) lastAnnouncementRef.current = { text: prompt, time: now };
-  }, [depthFeedback, rateFeedback, soundOn, status, rate, depth]);
+    if (playVoice(prompt)) lastAnnouncementRef.current = { text: prompt, time: now };
+  }, [depthFeedback, rateFeedback, soundOn, status, rate, depth, playVoice]);
 
   const resetMeasurements = () => {
     samplesRef.current = [];
@@ -278,6 +304,18 @@ export default function Home() {
       audioRef.current ??= new AudioConstructor();
       await audioRef.current.resume();
       createTone(audioRef.current);
+      if (Object.keys(voiceBuffersRef.current).length !== Object.keys(VOICE_FILES).length) {
+        const entries = await Promise.all(
+          (Object.entries(VOICE_FILES) as [VoicePrompt, string][]).map(async ([key, url]) => {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`Não foi possível carregar ${url}`);
+            const data = await response.arrayBuffer();
+            const buffer = await audioRef.current!.decodeAudioData(data);
+            return [key, buffer] as const;
+          }),
+        );
+        voiceBuffersRef.current = Object.fromEntries(entries) as Record<VoicePrompt, AudioBuffer>;
+      }
       setSoundOn(true);
       return true;
     } catch {
@@ -290,17 +328,17 @@ export default function Home() {
   const toggleSound = async () => {
     if (soundOn) {
       setSoundOn(false);
-      window.speechSynthesis?.cancel();
+      try { voiceSourceRef.current?.stop(); } catch { /* Message already ended. */ }
       return;
     }
     const enabled = await enableAudio();
-    if (enabled) speak("Áudio ativado");
+    if (enabled) playVoice("audio-ready");
   };
 
   const beginTrainingWithAudio = async () => {
     const enabled = await enableAudio();
     if (!enabled) return;
-    speak("Áudio ativado. Iniciando treinamento");
+    playVoice("audio-ready");
     lastAnnouncementRef.current = { text: "", time: performance.now() };
     updateStatus("calibrating");
     window.setTimeout(() => {
@@ -346,7 +384,7 @@ export default function Home() {
     if (status === "active") {
       accumulatedRef.current += (performance.now() - sessionStartRef.current) / 1000;
       updateStatus("paused");
-      window.speechSynthesis?.cancel();
+      try { voiceSourceRef.current?.stop(); } catch { /* Message already ended. */ }
     } else if (status === "paused") {
       sessionStartRef.current = performance.now();
       updateStatus("active");
