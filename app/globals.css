@@ -144,6 +144,45 @@ button { -webkit-tap-highlight-color: transparent; }
 .primary-button b { font-size: 20px; }
 .control-row { display: grid; grid-template-columns: 54px 1fr; gap: 9px; }
 .icon-button { min-height: 54px; border: 1px solid var(--line); border-radius: 14px; background: #141a17; color: var(--paper); font-size: 23px; cursor: pointer; }
+.pause-slider {
+  --pause-progress: 0%;
+  min-height: 54px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(31,231,108,.27);
+  border-radius: 15px;
+  background: #101713;
+  user-select: none;
+  touch-action: none;
+}
+.pause-slider-fill { position: absolute; inset: 0 auto 0 0; width: var(--pause-progress); background: linear-gradient(90deg, rgba(31,231,108,.28), rgba(31,231,108,.08)); transition: width .08s linear; }
+.pause-slider-label { position: absolute; inset: 0; display: grid; place-items: center; padding-left: 42px; color: #9ba49d; font-size: 11px; font-weight: 720; letter-spacing: .01em; pointer-events: none; transition: color .16s ease; }
+.pause-slider.is-dragging .pause-slider-label { color: var(--paper); }
+.pause-slider-thumb {
+  width: 48px;
+  height: 46px;
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: 12px;
+  background: var(--green);
+  color: #071009;
+  cursor: grab;
+  box-shadow: 0 5px 18px rgba(0,0,0,.28);
+  outline: none;
+  touch-action: none;
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+.pause-slider-thumb:active { cursor: grabbing; transition: box-shadow .08s ease; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+.pause-slider.is-dragging .pause-slider-thumb { transition: box-shadow .08s ease; }
+.pause-slider-thumb:focus-visible { box-shadow: 0 0 0 3px #071009, 0 0 0 5px var(--green); }
+.pause-slider-thumb span { font-size: 15px; font-weight: 900; }
+.pause-slider-thumb b { font-size: 21px; line-height: 1; }
 .calibrating-card { min-height: 54px; display: flex; align-items: center; justify-content: center; gap: 10px; border: 1px solid rgba(255,182,39,.25); border-radius: 14px; color: var(--amber); font-size: 11px; }
 .calibrating-card i { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); animation: pulse 1s infinite alternate; }
 .sensor-error { margin: 6px 0 0; color: #ff8b80; font-size: 9px; line-height: 1.25; text-align: center; }
@@ -166,8 +205,9 @@ button { -webkit-tap-highlight-color: transparent; }
   .depth-card { padding-block: 8px 7px; }
   .session-dock { padding-top: 6px; }
   .session-stats { margin-bottom: 5px; }
-  .session-action, .primary-button, .icon-button, .calibrating-card { min-height: 46px; }
+  .session-action, .primary-button, .icon-button, .pause-slider, .calibrating-card { min-height: 46px; }
   .control-row { grid-template-columns: 46px 1fr; }
+  .pause-slider-thumb { width: 42px; height: 40px; }
   .medical-note { margin-top: 4px; }
 }
 

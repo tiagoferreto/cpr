@@ -95,6 +95,7 @@ export default function Home() {
   const [soundOn, setSoundOn] = useState(true);
   const [sensorError, setSensorError] = useState("");
   const [audioError, setAudioError] = useState("");
+  const [pauseDrag, setPauseDrag] = useState({ progress: 0, offset: 0 });
 
   const statusRef = useRef<SensorStatus>("idle");
   const samplesRef = useRef<MotionSample[]>([]);
@@ -109,6 +110,8 @@ export default function Home() {
   const voiceSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const voiceUntilRef = useRef(0);
   const lastAnnouncementRef = useRef({ text: "", time: 0 });
+  const pauseDragRef = useRef({ progress: 0, offset: 0 });
+  const pauseStartXRef = useRef(0);
 
   const updateStatus = useCallback((next: SensorStatus) => {
     statusRef.current = next;
@@ -391,6 +394,52 @@ export default function Home() {
     }
   };
 
+  const updatePauseDrag = (next: { progress: number; offset: number }) => {
+    pauseDragRef.current = next;
+    setPauseDrag(next);
+  };
+
+  const handlePauseDragStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    pauseStartXRef.current = event.clientX;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    updatePauseDrag({ progress: 0, offset: 0 });
+  };
+
+  const handlePauseDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    const track = event.currentTarget.parentElement;
+    if (!track) return;
+    const maxOffset = Math.max(1, track.getBoundingClientRect().width - event.currentTarget.getBoundingClientRect().width - 8);
+    const offset = Math.min(maxOffset, Math.max(0, event.clientX - pauseStartXRef.current));
+    updatePauseDrag({ progress: offset / maxOffset, offset });
+  };
+
+  const finishPauseDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (pauseDragRef.current.progress >= 0.88) togglePause();
+    updatePauseDrag({ progress: 0, offset: 0 });
+  };
+
+  const handlePauseSliderKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape" || event.key === "Home") {
+      event.preventDefault();
+      updatePauseDrag({ progress: 0, offset: 0 });
+      return;
+    }
+    if (event.key !== "ArrowRight" && event.key !== "End") return;
+    event.preventDefault();
+    const progress = event.key === "End" ? 1 : Math.min(1, pauseDragRef.current.progress + 0.2);
+    if (progress >= 0.88) {
+      togglePause();
+      updatePauseDrag({ progress: 0, offset: 0 });
+    } else {
+      updatePauseDrag({ progress, offset: progress * 220 });
+    }
+  };
+
   const resetSession = () => {
     resetMeasurements();
     sessionStartRef.current = performance.now();
@@ -489,13 +538,41 @@ export default function Home() {
             <div className="calibrating-card" role="status">
               <i /><span>Calibrando… mantenha o aparelho imóvel</span>
             </div>
-          ) : (
+          ) : status === "paused" ? (
             <div className="control-row">
               <button className="icon-button" onClick={resetSession} aria-label="Reiniciar sessão" title="Reiniciar sessão">↺</button>
               <button className="primary-button" onClick={togglePause}>
-                <span>{status === "paused" ? "Continuar" : "Pausar"}</span>
-                <b aria-hidden="true">{status === "paused" ? "▶" : "Ⅱ"}</b>
+                <span>Continuar</span>
+                <b aria-hidden="true">▶</b>
               </button>
+            </div>
+          ) : (
+            <div
+              className={`pause-slider ${pauseDrag.progress > 0 ? "is-dragging" : ""}`}
+              style={{ "--pause-progress": `${pauseDrag.progress * 100}%` } as React.CSSProperties}
+            >
+              <i className="pause-slider-fill" aria-hidden="true" />
+              <span className="pause-slider-label">
+                {pauseDrag.progress > 0.62 ? "Continue arrastando" : "Deslize para pausar"}
+              </span>
+              <div
+                className="pause-slider-thumb"
+                role="slider"
+                tabIndex={0}
+                aria-label="Deslize para pausar a sessão"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(pauseDrag.progress * 100)}
+                style={{ transform: `translateX(${pauseDrag.offset}px)` }}
+                onPointerDown={handlePauseDragStart}
+                onPointerMove={handlePauseDragMove}
+                onPointerUp={finishPauseDrag}
+                onPointerCancel={finishPauseDrag}
+                onKeyDown={handlePauseSliderKey}
+              >
+                <span aria-hidden="true">Ⅱ</span>
+                <b aria-hidden="true">›</b>
+              </div>
             </div>
           )}
         </div>
