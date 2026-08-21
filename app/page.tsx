@@ -401,176 +401,115 @@ export default function Home() {
   const depthMarker = depth ? Math.min(100, Math.max(0, (depth / 8) * 100)) : 0;
 
   return (
-    <main className="app-shell">
-      <header className="topbar" id="top">
-        <a className="brand" href="#top" aria-label="Pulso — início">
-          <span className="brand-mark" aria-hidden="true">P</span>
+    <main className={`app-shell feedback-${rateFeedback}`}>
+      <header className="topbar">
+        <div className="brand" aria-label="Pulso">
+          <span className="brand-mark" aria-hidden="true">♥</span>
           <span>Pulso</span>
-        </a>
+        </div>
         <div className={`status-pill status-${status}`} role="status" aria-live="polite">
           <span className="status-dot" />
           {statusCopy[status]}
         </div>
       </header>
 
-      <section className="hero">
-        <div>
-          <p className="eyebrow">Treinamento de RCP · adulto</p>
-          <h1>Compressões no<br /><span>ritmo certo.</span></h1>
-        </div>
-        <p className="hero-copy">
-          Feedback audiovisual de cadência e estimativa experimental de profundidade usando
-          o sensor de movimento do celular.
-        </p>
-      </section>
-
-      <aside className="emergency-banner" role="note">
-        <div className="emergency-symbol" aria-hidden="true">!</div>
-        <div>
-          <strong>Em uma emergência real, ligue 192 primeiro.</strong>
-          <span> Siga as orientações do SAMU e use um DEA assim que disponível. Não atrase as compressões para posicionar o celular.</span>
-        </div>
-        <a href="tel:192">Ligar 192</a>
+      <aside className="emergency-strip" role="note">
+        <span>Emergência real: ligue 192 e siga o SAMU.</span>
+        <a href="tel:192" aria-label="Ligar para o SAMU no número 192">Ligar 192</a>
       </aside>
 
-      <section className={`cpr-dashboard feedback-${rateFeedback}`} aria-label="Feedback de compressões torácicas">
-        <div className="feedback-stage">
-          <div className="stage-heading">
-            <div>
-              <p className="panel-kicker">Cadência detectada</p>
-              <h2>Ritmo das compressões</h2>
-            </div>
-            <button
-              className={`sound-toggle ${soundOn ? "is-on" : ""}`}
-              type="button"
-              onClick={toggleSound}
-              aria-pressed={soundOn}
-            >
-              <span aria-hidden="true">{soundOn ? "◖))" : "◖×"}</span>
-              Som {soundOn ? "ligado" : "desligado"}
-            </button>
-          </div>
+      <section className="training-stage" aria-label="Feedback de compressões torácicas">
+        <div className="stage-tools">
+          <span>Ritmo alvo: 100–120/min</span>
+          <button
+            className={`sound-toggle ${soundOn ? "is-on" : ""}`}
+            type="button"
+            onClick={toggleSound}
+            aria-pressed={soundOn}
+            aria-label={soundOn ? "Desligar som" : "Ligar som"}
+          >
+            <span aria-hidden="true">{soundOn ? "◖))" : "◖×"}</span>
+            {soundOn ? "Som ligado" : "Som desligado"}
+          </button>
+        </div>
 
-          <div className="rate-visual" style={{ "--rate-progress": `${rateProgress}%` } as React.CSSProperties}>
-            <div className="rate-ring">
-              <div className="rate-number">
-                <strong>{rate || "—"}</strong>
-                <span>compressões/min</span>
-              </div>
+        <div className="rate-visual" style={{ "--rate-progress": `${rateProgress}%` } as React.CSSProperties}>
+          <div className="rate-ring">
+            <div className="rate-number">
+              <strong>{rate || "—"}</strong>
+              <span>compressões/min</span>
             </div>
-          </div>
-
-          <div className="live-feedback" role="status" aria-live="assertive">
-            <span className="feedback-icon" aria-hidden="true">
-              {rateFeedback === "good" ? "✓" : rateFeedback === "faster" ? "↑" : rateFeedback === "slower" ? "↓" : "·"}
-            </span>
-            <div>
-              <strong>{rateCopy[rateFeedback].title}</strong>
-              <span>{rateCopy[rateFeedback].detail}</span>
-            </div>
-          </div>
-
-          <div className="target-scale" aria-label="Faixa alvo entre 100 e 120 compressões por minuto">
-            <span>80</span><span>100</span><i /><span>120</span><span>140</span>
           </div>
         </div>
 
-        <aside className="session-panel">
-          <div className="session-stats">
-            <div><span>Tempo</span><strong>{formatTime(elapsed)}</strong></div>
-            <div><span>Compressões</span><strong>{compressions}</strong></div>
+        <div className="live-feedback" role="status" aria-live="assertive">
+          <span className="feedback-icon" aria-hidden="true">
+            {rateFeedback === "good" ? "✓" : rateFeedback === "faster" ? "↑" : rateFeedback === "slower" ? "↓" : "·"}
+          </span>
+          <div>
+            <strong>{rateCopy[rateFeedback].title}</strong>
+            <span>{rateCopy[rateFeedback].detail}</span>
           </div>
+        </div>
 
-          <div className={`depth-card depth-${depthFeedback}`}>
-            <div className="card-label">
-              <span>Profundidade estimada</span>
-              <b>Experimental</b>
-            </div>
-            <div className="depth-reading">
-              <strong>{depth ? depth.toFixed(1).replace(".", ",") : "—"}</strong>
-              <span>cm</span>
-            </div>
-            <div className="depth-track" aria-label="Alvo estimado entre 5 e 6 centímetros">
-              <i className="depth-target" />
-              {depth > 0 && <i className="depth-marker" style={{ left: `${depthMarker}%` }} />}
-            </div>
-            <div className="depth-labels"><span>0</span><span>alvo 5–6 cm</span><span>8</span></div>
-            <p>{depthCopy[depthFeedback]}</p>
+        <div className={`depth-card depth-${depthFeedback}`}>
+          <div className="depth-heading">
+            <span>Profundidade estimada</span>
+            <strong>{depth ? depth.toFixed(1).replace(".", ",") : "—"}<small> cm</small></strong>
           </div>
-
-          <div className="target-card">
-            <div><span>Ritmo recomendado</span><strong>100–120 <small>/min</small></strong></div>
-            <div><span>Profundidade no adulto</span><strong>5–6 <small>cm</small></strong></div>
+          <div className="depth-track" aria-label="Alvo estimado entre 5 e 6 centímetros">
+            <i className="depth-target" />
+            {depth > 0 && <i className="depth-marker" style={{ left: `${depthMarker}%` }} />}
           </div>
+          <div className="depth-caption">
+            <span>{depthCopy[depthFeedback]}</span>
+            <b>alvo 5–6 cm · experimental</b>
+          </div>
+        </div>
+      </section>
 
+      <section className="session-dock" aria-label="Controles da sessão">
+        <div className="session-stats">
+          <div><span>Tempo</span><strong>{formatTime(elapsed)}</strong></div>
+          <div><span>Compressões</span><strong>{compressions}</strong></div>
+        </div>
+
+        <div className="session-action">
           {!sessionStarted ? (
             <button className="primary-button" onClick={startSession} disabled={status === "requesting"}>
               <span>{status === "requesting" ? "Solicitando acesso…" : status === "denied" ? "Tentar novamente" : "Iniciar treinamento"}</span>
               <b aria-hidden="true">→</b>
             </button>
           ) : status === "audio-ready" ? (
-            <div className="audio-setup-card" role="group" aria-label="Ativação do retorno sonoro">
-              <div>
-                <strong>Ative o áudio antes de posicionar as mãos</strong>
-                <span>Você ouvirá um teste e depois receberá instruções por voz durante a sessão.</span>
-              </div>
-              <button className="primary-button" onClick={beginTrainingWithAudio}>
-                <span>Ativar áudio e começar</span>
-                <b aria-hidden="true">◖))</b>
-              </button>
-              {audioError && <p className="sensor-error">{audioError}</p>}
-            </div>
+            <button className="primary-button" onClick={beginTrainingWithAudio}>
+              <span>Ativar áudio e começar</span>
+              <b aria-hidden="true">◖))</b>
+            </button>
           ) : status === "calibrating" ? (
             <div className="calibrating-card" role="status">
-              <i /><span>Mantenha o aparelho imóvel por um instante…</span>
+              <i /><span>Calibrando… mantenha o aparelho imóvel</span>
             </div>
           ) : (
             <div className="control-row">
+              <button className="icon-button" onClick={resetSession} aria-label="Reiniciar sessão" title="Reiniciar sessão">↺</button>
               <button className="primary-button" onClick={togglePause}>
                 <span>{status === "paused" ? "Continuar" : "Pausar"}</span>
                 <b aria-hidden="true">{status === "paused" ? "▶" : "Ⅱ"}</b>
               </button>
-              <button className="icon-button" onClick={resetSession} aria-label="Reiniciar sessão" title="Reiniciar sessão">↺</button>
             </div>
           )}
-
-          {(status === "denied" || status === "unsupported") && (
-            <p className="sensor-error">
-              {status === "denied"
-                ? sensorError || "Autorize o acesso a movimento nas configurações do navegador."
-                : "Este navegador ou dispositivo não oferece os dados de movimento necessários."}
-            </p>
-          )}
-        </aside>
-      </section>
-
-      <section className="guidance-section" aria-labelledby="guidance-title">
-        <div className="guidance-heading">
-          <p className="eyebrow">Antes de começar</p>
-          <h2 id="guidance-title">Use como apoio de treinamento.</h2>
         </div>
-        <div className="guidance-list">
-          <article><b>01</b><div><strong>Priorize o socorro</strong><p>Em uma emergência, acione o SAMU 192, peça um DEA e siga as orientações do atendente.</p></div></article>
-          <article><b>02</b><div><strong>Treine em superfície firme</strong><p>Posicione o celular sobre um manequim de RCP, mantenha-o estável e toque em iniciar.</p></div></article>
-          <article><b>03</b><div><strong>Não confunda profundidade com pressão</strong><p>O aparelho estima deslocamento pelo acelerômetro; não mede força e pode errar com inclinação, colchões ou movimento do corpo.</p></div></article>
-        </div>
+
+        {(status === "denied" || status === "unsupported" || audioError) && (
+          <p className="sensor-error">
+            {audioError || (status === "denied"
+              ? sensorError || "Autorize o acesso a movimento nas configurações do navegador."
+              : "Este navegador ou dispositivo não oferece os dados de movimento necessários.")}
+          </p>
+        )}
+
+        <p className="medical-note">Protótipo educacional: profundidade aproximada, não mede pressão e não substitui treinamento certificado.</p>
       </section>
-
-      <aside className="medical-note">
-        <strong>Limitação clínica</strong>
-        <p>
-          Protótipo educacional não validado como dispositivo médico. A medição de cadência tende a ser mais robusta;
-          a profundidade é uma aproximação matemática e não deve orientar atendimento real. Para formação, procure um curso de RCP com manequim e dispositivo de feedback validado.
-        </p>
-      </aside>
-
-      <footer>
-        <span>Dados processados somente no dispositivo</span>
-        <nav aria-label="Fontes">
-          <a href="https://cpr.heart.org/en/resuscitation-science/cpr-and-ecc-guidelines/adult-basic-life-support" target="_blank" rel="noreferrer">AHA 2025</a>
-          <a href="https://www.gov.br/saude/pt-br/composicao/saes/samu-192" target="_blank" rel="noreferrer">SAMU 192</a>
-        </nav>
-      </footer>
     </main>
   );
 }
