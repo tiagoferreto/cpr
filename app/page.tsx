@@ -20,8 +20,8 @@ type VoicePrompt = "audio-ready" | "faster" | "slower" | "deeper" | "shallower" 
 const TARGET_RATE = 110;
 const MIN_RATE = 100;
 const MAX_RATE = 120;
-const MIN_DEPTH = 5;
-const MAX_DEPTH = 6;
+const MIN_DEPTH = 4.5;
+const MAX_DEPTH = 6.5;
 
 const VOICE_FILES: Record<VoicePrompt, string> = {
   "audio-ready": "/audio/audio-ready.wav",
@@ -361,9 +361,47 @@ export default function Home() {
     if (enabled) playVoice("audio-ready");
   };
 
+  const requestAppFullscreen = () => {
+    const root = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+    const fullscreenDocument = document as Document & { webkitFullscreenElement?: Element | null };
+    if (document.fullscreenElement || fullscreenDocument.webkitFullscreenElement) return;
+
+    try {
+      const request = root.requestFullscreen
+        ? root.requestFullscreen({ navigationUI: "hide" })
+        : root.webkitRequestFullscreen?.();
+      if (request instanceof Promise) void request.catch(() => undefined);
+    } catch {
+      // Fullscreen is optional; sensor training remains available when unsupported.
+    }
+  };
+
+  const exitAppFullscreen = () => {
+    const fullscreenDocument = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => Promise<void> | void;
+    };
+    if (!document.fullscreenElement && !fullscreenDocument.webkitFullscreenElement) return;
+
+    try {
+      const exit = document.fullscreenElement
+        ? document.exitFullscreen()
+        : fullscreenDocument.webkitExitFullscreen?.();
+      if (exit instanceof Promise) void exit.catch(() => undefined);
+    } catch {
+      // The browser may have already left fullscreen through a system gesture.
+    }
+  };
+
   const beginTrainingWithAudio = async () => {
+    requestAppFullscreen();
     const enabled = await enableAudio();
-    if (!enabled) return;
+    if (!enabled) {
+      exitAppFullscreen();
+      return;
+    }
     playVoice("audio-ready");
     lastAnnouncementRef.current = { text: "", time: performance.now() };
     updateStatus("calibrating");
@@ -413,6 +451,7 @@ export default function Home() {
     compressionTimesRef.current = [];
     peakWindowRef.current = [];
     updateStatus("stopped");
+    exitAppFullscreen();
     try { voiceSourceRef.current?.stop(); } catch { /* Message already ended. */ }
   };
 
@@ -523,13 +562,16 @@ export default function Home() {
             <span>Profundidade estimada</span>
             <strong>{depth ? depth.toFixed(1).replace(".", ",") : "—"}<small> cm</small></strong>
           </div>
-          <div className="depth-track" aria-label="Alvo estimado entre 5 e 6 centímetros">
-            <i className="depth-target" />
+          <div className="depth-track" aria-label="Alvo estimado entre 4,5 e 6,5 centímetros">
+            <i
+              className="depth-target"
+              style={{ left: `${(MIN_DEPTH / 8) * 100}%`, width: `${((MAX_DEPTH - MIN_DEPTH) / 8) * 100}%` }}
+            />
             {depth > 0 && <i className="depth-marker" style={{ left: `${depthMarker}%` }} />}
           </div>
           <div className="depth-caption">
             <span>{depthCopy[depthFeedback]}</span>
-            <b>alvo 5–6 cm · experimental</b>
+            <b>alvo 4,5–6,5 cm · experimental</b>
           </div>
         </div>
       </section>
