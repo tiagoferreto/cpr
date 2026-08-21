@@ -61,7 +61,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .status-audio-ready .status-dot { background: var(--amber); animation: pulse 1s infinite alternate; }
 .status-denied .status-dot,
 .status-unsupported .status-dot { background: var(--red); }
-.status-paused .status-dot { background: var(--cyan); }
+.status-stopped .status-dot { background: var(--red); }
 @keyframes pulse { to { opacity: .35; } }
 
 .emergency-strip {
@@ -142,8 +142,6 @@ button { -webkit-tap-highlight-color: transparent; }
 .primary-button:active { transform: scale(.99); }
 .primary-button:disabled { cursor: wait; opacity: .6; }
 .primary-button b { font-size: 20px; }
-.control-row { display: grid; grid-template-columns: 54px 1fr; gap: 9px; }
-.icon-button { min-height: 54px; border: 1px solid var(--line); border-radius: 14px; background: #141a17; color: var(--paper); font-size: 23px; cursor: pointer; }
 .pause-slider {
   --pause-progress: 0%;
   min-height: 54px;
@@ -205,8 +203,7 @@ button { -webkit-tap-highlight-color: transparent; }
   .depth-card { padding-block: 8px 7px; }
   .session-dock { padding-top: 6px; }
   .session-stats { margin-bottom: 5px; }
-  .session-action, .primary-button, .icon-button, .pause-slider, .calibrating-card { min-height: 46px; }
-  .control-row { grid-template-columns: 46px 1fr; }
+  .session-action, .primary-button, .pause-slider, .calibrating-card { min-height: 46px; }
   .pause-slider-thumb { width: 42px; height: 40px; }
   .medical-note { margin-top: 4px; }
 }

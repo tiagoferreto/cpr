@@ -8,7 +8,7 @@ type SensorStatus =
   | "audio-ready"
   | "calibrating"
   | "active"
-  | "paused"
+  | "stopped"
   | "denied"
   | "unsupported";
 
@@ -39,7 +39,7 @@ const statusCopy: Record<SensorStatus, string> = {
   "audio-ready": "Ative o retorno sonoro",
   calibrating: "Calibrando sensor",
   active: "Sessão em andamento",
-  paused: "Sessão pausada",
+  stopped: "Sessão finalizada",
   denied: "Acesso não autorizado",
   unsupported: "Sensor indisponível",
 };
@@ -100,7 +100,9 @@ export default function Home() {
   const statusRef = useRef<SensorStatus>("idle");
   const samplesRef = useRef<MotionSample[]>([]);
   const gravityRef = useRef({ x: 0, y: 0, z: 9.81 });
+  const gravityReadyRef = useRef(false);
   const peakWindowRef = useRef<{ time: number; value: number }[]>([]);
+  const compressionArmedRef = useRef(true);
   const compressionTimesRef = useRef<number[]>([]);
   const lastPeakRef = useRef(0);
   const sessionStartRef = useRef(0);
@@ -179,7 +181,7 @@ export default function Home() {
 
     if (times.length < 3) return;
     const intervals = times.slice(1).map((time, index) => time - times[index]);
-    const validIntervals = intervals.filter((interval) => interval >= 300 && interval <= 950);
+    const validIntervals = intervals.filter((interval) => interval >= 360 && interval <= 1_100);
     if (validIntervals.length < 2) return;
     const nextRate = Math.round(60_000 / median(validIntervals));
     setRate((current) => current ? Math.round(current * 0.55 + nextRate * 0.45) : nextRate);
@@ -194,13 +196,21 @@ export default function Home() {
     const includingGravity = event.accelerationIncludingGravity;
     if (!includingGravity) return;
 
+    const measuredGravity = {
+      x: includingGravity.x ?? 0,
+      y: includingGravity.y ?? 0,
+      z: includingGravity.z ?? 0,
+    };
     const alpha = statusRef.current === "calibrating" ? 0.82 : 0.965;
     const previousGravity = gravityRef.current;
-    const gravity = {
-      x: alpha * previousGravity.x + (1 - alpha) * (includingGravity.x ?? 0),
-      y: alpha * previousGravity.y + (1 - alpha) * (includingGravity.y ?? 0),
-      z: alpha * previousGravity.z + (1 - alpha) * (includingGravity.z ?? 0),
-    };
+    const gravity = gravityReadyRef.current
+      ? {
+          x: alpha * previousGravity.x + (1 - alpha) * measuredGravity.x,
+          y: alpha * previousGravity.y + (1 - alpha) * measuredGravity.y,
+          z: alpha * previousGravity.z + (1 - alpha) * measuredGravity.z,
+        }
+      : measuredGravity;
+    gravityReadyRef.current = true;
     gravityRef.current = gravity;
     if (statusRef.current === "calibrating") return;
 
@@ -221,14 +231,20 @@ export default function Home() {
     samplesRef.current.push({ time: now, vertical });
     samplesRef.current = samplesRef.current.filter((sample) => sample.time >= now - 2_200);
 
+    if (vertical < -0.55) compressionArmedRef.current = true;
+
     const window = peakWindowRef.current;
-    window.push({ time: now, value: Math.abs(vertical) });
+    window.push({ time: now, value: vertical });
     peakWindowRef.current = window.slice(-3);
     if (peakWindowRef.current.length < 3) return;
 
     const [first, middle, last] = peakWindowRef.current;
-    const isPeak = middle.value > 1.1 && middle.value > first.value && middle.value >= last.value;
-    if (isPeak && middle.time - lastPeakRef.current > 340) registerCompression(middle.time);
+    const isCompressionPeak = middle.value > 0.9 && middle.value > first.value && middle.value >= last.value;
+    const hasCompletedCycle = compressionArmedRef.current || middle.time - lastPeakRef.current > 950;
+    if (isCompressionPeak && hasCompletedCycle && middle.time - lastPeakRef.current > 360) {
+      compressionArmedRef.current = false;
+      registerCompression(middle.time);
+    }
   }, [registerCompression]);
 
   useEffect(() => {
@@ -287,10 +303,17 @@ export default function Home() {
     peakWindowRef.current = [];
     compressionTimesRef.current = [];
     lastPeakRef.current = 0;
+    gravityRef.current = { x: 0, y: 0, z: 9.81 };
+    gravityReadyRef.current = false;
+    compressionArmedRef.current = true;
+    sessionStartRef.current = 0;
+    lastAnnouncementRef.current = { text: "", time: 0 };
+    pauseDragRef.current = { progress: 0, offset: 0 };
     setRate(0);
     setDepth(0);
     setCompressions(0);
     setElapsed(0);
+    setPauseDrag({ progress: 0, offset: 0 });
     accumulatedRef.current = 0;
   };
 
@@ -355,6 +378,7 @@ export default function Home() {
       updateStatus("unsupported");
       return;
     }
+    resetMeasurements();
     updateStatus("requesting");
     setSensorError("");
 
@@ -370,8 +394,6 @@ export default function Home() {
           return;
         }
       }
-
-      resetMeasurements();
       setAudioError("");
       updateStatus("audio-ready");
     } catch (error) {
@@ -383,15 +405,15 @@ export default function Home() {
     }
   };
 
-  const togglePause = () => {
-    if (status === "active") {
-      accumulatedRef.current += (performance.now() - sessionStartRef.current) / 1000;
-      updateStatus("paused");
-      try { voiceSourceRef.current?.stop(); } catch { /* Message already ended. */ }
-    } else if (status === "paused") {
-      sessionStartRef.current = performance.now();
-      updateStatus("active");
-    }
+  const stopSession = () => {
+    if (statusRef.current !== "active") return;
+    const finalElapsed = accumulatedRef.current + (performance.now() - sessionStartRef.current) / 1_000;
+    accumulatedRef.current = finalElapsed;
+    setElapsed(finalElapsed);
+    compressionTimesRef.current = [];
+    peakWindowRef.current = [];
+    updateStatus("stopped");
+    try { voiceSourceRef.current?.stop(); } catch { /* Message already ended. */ }
   };
 
   const updatePauseDrag = (next: { progress: number; offset: number }) => {
@@ -419,7 +441,7 @@ export default function Home() {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    if (pauseDragRef.current.progress >= 0.88) togglePause();
+    if (pauseDragRef.current.progress >= 0.88) stopSession();
     updatePauseDrag({ progress: 0, offset: 0 });
   };
 
@@ -433,19 +455,14 @@ export default function Home() {
     event.preventDefault();
     const progress = event.key === "End" ? 1 : Math.min(1, pauseDragRef.current.progress + 0.2);
     if (progress >= 0.88) {
-      togglePause();
+      stopSession();
       updatePauseDrag({ progress: 0, offset: 0 });
     } else {
       updatePauseDrag({ progress, offset: progress * 220 });
     }
   };
 
-  const resetSession = () => {
-    resetMeasurements();
-    sessionStartRef.current = performance.now();
-  };
-
-  const sessionStarted = status === "active" || status === "paused" || status === "calibrating" || status === "audio-ready";
+  const sessionStarted = status === "active" || status === "calibrating" || status === "audio-ready";
   const rateProgress = rate ? Math.min(100, Math.max(0, ((rate - 70) / 80) * 100)) : 0;
   const depthMarker = depth ? Math.min(100, Math.max(0, (depth / 8) * 100)) : 0;
 
@@ -526,7 +543,7 @@ export default function Home() {
         <div className="session-action">
           {!sessionStarted ? (
             <button className="primary-button" onClick={startSession} disabled={status === "requesting"}>
-              <span>{status === "requesting" ? "Solicitando acesso…" : status === "denied" ? "Tentar novamente" : "Iniciar treinamento"}</span>
+              <span>{status === "requesting" ? "Solicitando acesso…" : status === "denied" ? "Tentar novamente" : "Começar"}</span>
               <b aria-hidden="true">→</b>
             </button>
           ) : status === "audio-ready" ? (
@@ -538,14 +555,6 @@ export default function Home() {
             <div className="calibrating-card" role="status">
               <i /><span>Calibrando… mantenha o aparelho imóvel</span>
             </div>
-          ) : status === "paused" ? (
-            <div className="control-row">
-              <button className="icon-button" onClick={resetSession} aria-label="Reiniciar sessão" title="Reiniciar sessão">↺</button>
-              <button className="primary-button" onClick={togglePause}>
-                <span>Continuar</span>
-                <b aria-hidden="true">▶</b>
-              </button>
-            </div>
           ) : (
             <div
               className={`pause-slider ${pauseDrag.progress > 0 ? "is-dragging" : ""}`}
@@ -553,13 +562,13 @@ export default function Home() {
             >
               <i className="pause-slider-fill" aria-hidden="true" />
               <span className="pause-slider-label">
-                {pauseDrag.progress > 0.62 ? "Continue arrastando" : "Deslize para pausar"}
+                {pauseDrag.progress > 0.62 ? "Continue arrastando" : "Deslize para parar"}
               </span>
               <div
                 className="pause-slider-thumb"
                 role="slider"
                 tabIndex={0}
-                aria-label="Deslize para pausar a sessão"
+                aria-label="Deslize para parar a sessão"
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={Math.round(pauseDrag.progress * 100)}
@@ -570,7 +579,7 @@ export default function Home() {
                 onPointerCancel={finishPauseDrag}
                 onKeyDown={handlePauseSliderKey}
               >
-                <span aria-hidden="true">Ⅱ</span>
+                <span aria-hidden="true">■</span>
                 <b aria-hidden="true">›</b>
               </div>
             </div>
