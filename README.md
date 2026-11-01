@@ -27,6 +27,7 @@ exponha o servidor de desenvolvimento por HTTPS.
 - `npm run build`: checagem de tipos e build estático em `dist/`
 - `npm run preview`: serve o build localmente em `/cpr/`
 - `npm run lint`: ESLint
+- `npm test`: testes do processamento de sinal (`src/signal.test.ts`)
 
 ## Publicação
 

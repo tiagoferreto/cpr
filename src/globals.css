@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --font-geist-sans: "Geist";
-  --font-geist-mono: "Geist Mono";
+  --font-geist-sans: "Geist Variable";
+  --font-geist-mono: "Geist Mono Variable";
   --ink: #070b09;
   --surface: #101613;
   --surface-2: #171e1a;
@@ -208,6 +208,33 @@ button { -webkit-tap-highlight-color: transparent; }
   .session-action, .primary-button, .pause-slider, .calibrating-card { min-height: 46px; }
   .pause-slider-thumb { width: 42px; height: 40px; }
   .medical-note { margin-top: 4px; }
+}
+
+/* Phones in landscape: ring on the left, feedback and depth on the right. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .app-shell { width: min(100%, 900px); padding-inline: max(16px, env(safe-area-inset-left)) max(16px, env(safe-area-inset-right)); }
+  .topbar { min-height: 44px; }
+  .brand-mark { width: 26px; height: 26px; font-size: 13px; }
+  .emergency-strip { min-height: 28px; margin-top: 4px; padding-block: 3px; }
+  .training-stage {
+    padding-block: 4px;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    column-gap: clamp(16px, 4vw, 36px);
+  }
+  .stage-tools { grid-column: 1 / -1; }
+  .rate-visual { grid-row: 2 / 4; padding: 0; }
+  .rate-ring { width: clamp(96px, calc(100dvh - 230px), 220px); min-width: 0; }
+  .rate-ring::after { inset: -5px; }
+  .rate-number strong { font-size: clamp(34px, 11dvh, 64px); }
+  .rate-number span { margin-top: 5px; font-size: 8px; }
+  .live-feedback { min-height: 0; padding: 0; justify-content: flex-start; align-self: end; }
+  .depth-card { align-self: start; margin-top: 8px; padding-block: 7px 6px; }
+  .session-dock { padding-top: 5px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); column-gap: 16px; align-items: center; }
+  .session-stats { margin-bottom: 0; }
+  .session-action, .primary-button, .pause-slider, .calibrating-card { min-height: 44px; }
+  .pause-slider-thumb { width: 42px; height: 38px; }
+  .sensor-error, .medical-note { grid-column: 1 / -1; margin-top: 3px; }
 }
 
 @media (max-width: 370px) {
