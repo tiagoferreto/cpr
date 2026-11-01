@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type SensorStatus =
@@ -23,14 +21,16 @@ const MAX_RATE = 120;
 const MIN_DEPTH = 4.5;
 const MAX_DEPTH = 6.5;
 
+const AUDIO_BASE = `${import.meta.env.BASE_URL}audio/`;
+
 const VOICE_FILES: Record<VoicePrompt, string> = {
-  "audio-ready": "/audio/audio-ready.wav",
-  faster: "/audio/faster.wav",
-  slower: "/audio/slower.wav",
-  deeper: "/audio/deeper.wav",
-  shallower: "/audio/shallower.wav",
-  good: "/audio/good.wav",
-  "rhythm-good": "/audio/rhythm-good.wav",
+  "audio-ready": `${AUDIO_BASE}audio-ready.wav`,
+  faster: `${AUDIO_BASE}faster.wav`,
+  slower: `${AUDIO_BASE}slower.wav`,
+  deeper: `${AUDIO_BASE}deeper.wav`,
+  shallower: `${AUDIO_BASE}shallower.wav`,
+  good: `${AUDIO_BASE}good.wav`,
+  "rhythm-good": `${AUDIO_BASE}rhythm-good.wav`,
 };
 
 const statusCopy: Record<SensorStatus, string> = {
