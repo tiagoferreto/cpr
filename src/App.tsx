@@ -42,30 +42,38 @@ const VOICE_FILES: Record<VoicePrompt, string> = {
   "rhythm-good": `${AUDIO_BASE}rhythm-good.mp3`,
 };
 
-const statusCopy: Record<SensorStatus, string> = {
-  idle: "Pronto para treinar",
-  requesting: "Aguardando permissão",
-  "audio-ready": "Pronto para começar",
-  calibrating: "Calibrando sensor",
-  active: "Sessão em andamento",
-  stopped: "Sessão finalizada",
-  denied: "Acesso não autorizado",
-  unsupported: "Sensor indisponível",
+type TrainingTone = "neutral" | "good" | "adjust";
+type SessionStats = {
+  rateTicks: number;
+  rateInRange: number;
+  rateSum: number;
+  depthTicks: number;
+  depthInRange: number;
+  depthSum: number;
+};
+type SessionSummary = {
+  avgRate: number | null;
+  rateInRangePct: number | null;
+  avgDepth: number | null;
+  depthInRangePct: number | null;
 };
 
-const rateCopy: Record<RateFeedback, { title: string; detail: string }> = {
-  waiting: { title: "Aguardando compressões", detail: "Comece acompanhando o pulso sonoro" },
-  good: { title: "Ritmo adequado", detail: "Mantenha esta cadência" },
-  faster: { title: "Aumente o ritmo", detail: "Comprima um pouco mais rápido" },
-  slower: { title: "Diminua o ritmo", detail: "Comprima um pouco mais devagar" },
-};
+const emptyStats = (): SessionStats => ({
+  rateTicks: 0, rateInRange: 0, rateSum: 0, depthTicks: 0, depthInRange: 0, depthSum: 0,
+});
 
-const depthCopy: Record<DepthFeedback, string> = {
-  waiting: "Aguardando leitura",
-  good: "Faixa estimada adequada",
-  deeper: "Aumente a profundidade",
-  shallower: "Diminua a profundidade",
-};
+function instructionFor(rate: RateFeedback, depth: DepthFeedback) {
+  if (rate === "waiting") return { title: "Comece as compressões", detail: "Siga o ritmo do metrônomo" };
+  if (rate === "faster") return { title: "↑ Mais rápido", detail: "Ritmo abaixo de 100/min" };
+  if (rate === "slower") return { title: "↓ Mais devagar", detail: "Ritmo acima de 120/min" };
+  if (depth === "deeper") return { title: "Mais fundo", detail: "Ritmo certo, comprima mais" };
+  if (depth === "shallower") return { title: "Mais leve", detail: "Ritmo certo, comprima menos" };
+  return { title: "✓ Mantenha", detail: "Ritmo certo" };
+}
+
+function formatCm(value: number) {
+  return value.toFixed(1).replace(".", ",");
+}
 
 function formatTime(seconds: number) {
   const minutes = Math.floor(seconds / 60).toString().padStart(2, "0");
@@ -121,6 +129,7 @@ export default function Home() {
   const [audioError, setAudioError] = useState("");
   const [notice, setNotice] = useState("");
   const [pauseDrag, setPauseDrag] = useState({ progress: 0, offset: 0 });
+  const [summary, setSummary] = useState<SessionSummary | null>(null);
 
   const statusRef = useRef<SensorStatus>("idle");
   const samplesRef = useRef<FilteredSample[]>([]);
@@ -132,6 +141,8 @@ export default function Home() {
   const compressionTimesRef = useRef<number[]>([]);
   const lastPeakRef = useRef(0);
   const rateRef = useRef(0);
+  const depthRef = useRef(0);
+  const statsRef = useRef<SessionStats>(emptyStats());
   const sessionStartRef = useRef(0);
   const calibrationTimerRef = useRef(0);
   const startingRef = useRef(false);
@@ -197,7 +208,8 @@ export default function Home() {
     const recent = samplesRef.current.filter((sample) => sample.time >= time - DEPTH_WINDOW_MS);
     const nextDepth = estimateDepth(recent, smoothedRate);
     if (nextDepth) {
-      setDepth((current) => current ? current * 0.62 + nextDepth * 0.38 : nextDepth);
+      depthRef.current = depthRef.current ? depthRef.current * 0.62 + nextDepth * 0.38 : nextDepth;
+      setDepth(depthRef.current);
     }
   }, []);
 
@@ -260,9 +272,22 @@ export default function Home() {
         setElapsed((performance.now() - sessionStartRef.current) / 1000);
         if (lastPeakRef.current && performance.now() - lastPeakRef.current > 1_600) {
           rateRef.current = 0;
+          depthRef.current = 0;
           setRate(0);
           setDepth(0);
           compressionTimesRef.current = [];
+        }
+        // Sampled every tick, so the summary percentages are shares of time with a reading.
+        const stats = statsRef.current;
+        if (rateRef.current) {
+          stats.rateTicks += 1;
+          stats.rateSum += rateRef.current;
+          if (rateRef.current >= MIN_RATE && rateRef.current <= MAX_RATE) stats.rateInRange += 1;
+        }
+        if (depthRef.current) {
+          stats.depthTicks += 1;
+          stats.depthSum += depthRef.current;
+          if (depthRef.current >= MIN_DEPTH && depthRef.current <= MAX_DEPTH) stats.depthInRange += 1;
         }
       }
     }, 250);
@@ -341,6 +366,8 @@ export default function Home() {
     compressionTimesRef.current = [];
     lastPeakRef.current = 0;
     rateRef.current = 0;
+    depthRef.current = 0;
+    statsRef.current = emptyStats();
     gravityRef.current = { x: 0, y: 0, z: 9.81 };
     gravityReadyRef.current = false;
     motionSamplesRef.current = 0;
@@ -352,6 +379,7 @@ export default function Home() {
     setCompressions(0);
     setElapsed(0);
     setNotice("");
+    setSummary(null);
     setPauseDrag({ progress: 0, offset: 0 });
   };
 
@@ -366,7 +394,12 @@ export default function Home() {
         return false;
       }
       const context = audioRef.current ??= new AudioConstructor();
-      await context.resume();
+      // resume() can stay pending (no user activation, iOS "interrupted"), so never let it block training.
+      await Promise.race([
+        context.resume(),
+        new Promise((_, reject) => window.setTimeout(() => reject(new Error("resume timeout")), 1_500)),
+      ]);
+      if (context.state !== "running") throw new Error("Audio context not running");
       createTone(context);
     } catch {
       setAudioError("O navegador bloqueou o áudio. Aumente o volume e toque em “Som desligado” para tentar de novo.");
@@ -510,6 +543,13 @@ export default function Home() {
     if (statusRef.current !== "active") return;
     setElapsed((performance.now() - sessionStartRef.current) / 1_000);
     compressionTimesRef.current = [];
+    const stats = statsRef.current;
+    setSummary({
+      avgRate: stats.rateTicks ? Math.round(stats.rateSum / stats.rateTicks) : null,
+      rateInRangePct: stats.rateTicks ? Math.round((stats.rateInRange / stats.rateTicks) * 100) : null,
+      avgDepth: stats.depthTicks ? stats.depthSum / stats.depthTicks : null,
+      depthInRangePct: stats.depthTicks ? Math.round((stats.depthInRange / stats.depthTicks) * 100) : null,
+    });
     updateStatus("stopped");
     exitAppFullscreen();
     stopVoice();
@@ -576,108 +616,63 @@ export default function Home() {
     }
   };
 
-  const sessionStarted = status === "active" || status === "calibrating" || status === "audio-ready";
-  const rateProgress = rate ? Math.min(100, Math.max(0, ((rate - 70) / 80) * 100)) : 0;
-  const depthMarker = depth ? Math.min(100, Math.max(0, (depth / 8) * 100)) : 0;
+  const goHome = () => {
+    setNotice("");
+    updateStatus("idle");
+  };
+
+  const screen = status === "calibrating" || status === "active" ? "training" : status === "stopped" ? "summary" : "start";
+  const tone: TrainingTone = status !== "active" || rateFeedback === "waiting"
+    ? "neutral"
+    : rateFeedback === "good" && (depthFeedback === "good" || depthFeedback === "waiting") ? "good" : "adjust";
+  const instruction = status === "calibrating"
+    ? { title: "Calibrando…", detail: "Mantenha o aparelho imóvel" }
+    : instructionFor(rateFeedback, depthFeedback);
+  const depthLine = !depth
+    ? "Profundidade: aguardando leitura"
+    : `Profundidade ${depthFeedback === "good" ? "ok" : depthFeedback === "deeper" ? "baixa" : "alta"} · ${formatCm(depth)} cm`;
   const message = audioError
     || (status === "denied" ? sensorError || "Autorize o acesso a movimento nas configurações do navegador." : "")
-    || (status === "unsupported" ? "Este navegador ou dispositivo não oferece os dados de movimento necessários." : "")
-    || (status === "stopped" ? notice : "");
+    || (status === "unsupported" ? "Este navegador ou dispositivo não oferece os dados de movimento necessários." : "");
 
-  return (
-    <main className={`app-shell feedback-${rateFeedback}`}>
-      <header className="topbar">
-        <div className="brand" aria-label="Pulso">
-          <span className="brand-mark" aria-hidden="true">♥</span>
-          <span>Pulso</span>
-        </div>
-        <div className={`status-pill status-${status}`} role="status" aria-live="polite">
-          <span className="status-dot" />
-          {statusCopy[status]}
-        </div>
-      </header>
+  const soundToggle = (
+    <button
+      className={`sound-toggle ${soundOn ? "is-on" : ""}`}
+      type="button"
+      onClick={toggleSound}
+      aria-pressed={soundOn}
+      aria-label={soundOn ? "Desligar som" : "Ligar som"}
+    >
+      <span aria-hidden="true">{soundOn ? "◖))" : "◖×"}</span>
+      {screen === "start" && (soundOn ? "Som ligado" : "Som desligado")}
+    </button>
+  );
 
-      <aside className="emergency-strip" role="note">
-        <span>Emergência real: ligue 192 e siga o SAMU.</span>
-        <a href="tel:192" aria-label="Ligar para o SAMU no número 192">Ligar 192</a>
-      </aside>
-
-      <section className="training-stage" aria-label="Feedback de compressões torácicas">
-        <div className="stage-tools">
-          <span>Ritmo alvo: 100–120/min</span>
-          <button
-            className={`sound-toggle ${soundOn ? "is-on" : ""}`}
-            type="button"
-            onClick={toggleSound}
-            aria-pressed={soundOn}
-            aria-label={soundOn ? "Desligar som" : "Ligar som"}
-          >
-            <span aria-hidden="true">{soundOn ? "◖))" : "◖×"}</span>
-            {soundOn ? "Som ligado" : "Som desligado"}
-          </button>
-        </div>
-
-        <div className="rate-visual" style={{ "--rate-progress": `${rateProgress}%` } as React.CSSProperties}>
-          <div className="rate-ring">
-            <div className="rate-number">
-              <strong>{rate || "—"}</strong>
-              <span>compressões/min</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="live-feedback">
-          <span className="feedback-icon" aria-hidden="true">
-            {rateFeedback === "good" ? "✓" : rateFeedback === "faster" ? "↑" : rateFeedback === "slower" ? "↓" : "·"}
+  if (screen === "training") {
+    return (
+      <main className={`app-shell training tone-${tone}`}>
+        <header className="training-bar">
+          <span className="training-stats">
+            <span aria-label="Tempo">{formatTime(elapsed)}</span>
+            <span aria-hidden="true">·</span>
+            <span aria-label="Compressões">{compressions}</span>
           </span>
-          <div>
-            {/* Only the headline is announced, and politely, so screen readers are not interrupted on every change. */}
-            <strong role="status" aria-live="polite">{rateCopy[rateFeedback].title}</strong>
-            <span>{rateCopy[rateFeedback].detail}</span>
-          </div>
-        </div>
+          {soundToggle}
+        </header>
 
-        <div className={`depth-card depth-${depthFeedback}`}>
-          <div className="depth-heading">
-            <span>Profundidade estimada</span>
-            <strong>{depth ? depth.toFixed(1).replace(".", ",") : "—"}<small> cm</small></strong>
+        <section className="training-readout" aria-label="Feedback de compressões torácicas">
+          <div className="rate-number">
+            <strong>{rate || "—"}</strong>
+            <span>compressões/min</span>
           </div>
-          <div className="depth-track" aria-label="Alvo estimado entre 4,5 e 6,5 centímetros">
-            <i
-              className="depth-target"
-              style={{ left: `${(MIN_DEPTH / 8) * 100}%`, width: `${((MAX_DEPTH - MIN_DEPTH) / 8) * 100}%` }}
-            />
-            {depth > 0 && <i className="depth-marker" style={{ left: `${depthMarker}%` }} />}
+          <div className="instruction">
+            <strong role="status" aria-live="polite">{instruction.title}</strong>
+            <span>{status === "active" ? depthLine : instruction.detail}</span>
           </div>
-          <div className="depth-caption">
-            <span>{depthCopy[depthFeedback]}</span>
-            <b>alvo 4,5–6,5 cm · experimental</b>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <section className="session-dock" aria-label="Controles da sessão">
-        <div className="session-stats">
-          <div><span>Tempo</span><strong>{formatTime(elapsed)}</strong></div>
-          <div><span>Compressões</span><strong>{compressions}</strong></div>
-        </div>
-
-        <div className="session-action">
-          {!sessionStarted ? (
-            <button className="primary-button" onClick={startSession} disabled={status === "requesting"}>
-              <span>{status === "requesting" ? "Solicitando acesso…" : status === "denied" ? "Tentar novamente" : "Começar"}</span>
-              <b aria-hidden="true">→</b>
-            </button>
-          ) : status === "audio-ready" ? (
-            <button className="primary-button" onClick={beginTraining} disabled={starting}>
-              <span>{starting ? "Preparando…" : soundOn ? "Ativar áudio e começar" : "Começar sem som"}</span>
-              <b aria-hidden="true">{soundOn ? "◖))" : "→"}</b>
-            </button>
-          ) : status === "calibrating" ? (
-            <div className="calibrating-card" role="status">
-              <i /><span>Calibrando… mantenha o aparelho imóvel</span>
-            </div>
-          ) : (
+        <footer className="training-dock">
+          {status === "active" && (
             <div
               className={`pause-slider ${pauseDrag.progress > 0 ? "is-dragging" : ""}`}
               style={{ "--pause-progress": `${pauseDrag.progress * 100}%` } as React.CSSProperties}
@@ -706,12 +701,91 @@ export default function Home() {
               </div>
             </div>
           )}
-        </div>
+        </footer>
+      </main>
+    );
+  }
 
-        {message && <p className="sensor-error">{message}</p>}
+  if (screen === "summary") {
+    const metrics = [
+      { label: "Duração", value: formatTime(elapsed) },
+      { label: "Compressões", value: String(compressions) },
+      { label: "Ritmo médio", value: summary?.avgRate ? `${summary.avgRate}/min` : "—" },
+      { label: "No ritmo certo", value: summary?.rateInRangePct != null ? `${summary.rateInRangePct}%` : "—" },
+      { label: "Profundidade média", value: summary?.avgDepth ? `${formatCm(summary.avgDepth)} cm` : "—" },
+      { label: "Na profundidade certa", value: summary?.depthInRangePct != null ? `${summary.depthInRangePct}%` : "—" },
+    ];
+    const ratePct = summary?.rateInRangePct;
+    const verdict = ratePct == null
+      ? "Nenhuma compressão foi medida nesta sessão."
+      : ratePct >= 80
+        ? "Ótimo controle de ritmo."
+        : "Tente manter o ritmo entre 100 e 120/min por mais tempo.";
 
-        <p className="medical-note">Protótipo educacional: profundidade aproximada, não mede pressão e não substitui treinamento certificado.</p>
+    return (
+      <main className="app-shell page">
+        <header className="page-header">
+          <span className="brand"><span className="brand-mark" aria-hidden="true">♥</span>Pulso</span>
+        </header>
+        <section className="summary" aria-labelledby="summary-title">
+          <h1 id="summary-title">{notice ? "Sessão interrompida" : "Sessão concluída"}</h1>
+          <p className="lead">{notice || verdict}</p>
+          <dl className="summary-grid">
+            {metrics.map((metric) => (
+              <div key={metric.label}>
+                <dt>{metric.label}</dt>
+                <dd>{metric.value}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="fine-print">Profundidade estimada pelo acelerômetro, valor aproximado.</p>
+        </section>
+        <footer className="page-actions">
+          <button className="primary-button" type="button" onClick={startSession}>Treinar novamente</button>
+          <button className="secondary-button" type="button" onClick={goHome}>Início</button>
+        </footer>
+      </main>
+    );
+  }
+
+  return (
+    <main className="app-shell page">
+      <header className="page-header">
+        <span className="brand"><span className="brand-mark" aria-hidden="true">♥</span>Pulso</span>
+        {soundToggle}
+      </header>
+
+      <section className="start" aria-labelledby="start-title">
+        <h1 id="start-title">Treine compressões no ritmo certo</h1>
+        <p className="lead">
+          O celular mede o movimento das compressões e indica, com cor e voz, quando ajustar o ritmo ou a profundidade.
+        </p>
+        <dl className="targets">
+          <div><dt>Ritmo</dt><dd>100–120/min</dd></div>
+          <div><dt>Profundidade</dt><dd>4,5–6,5 cm</dd></div>
+        </dl>
+        <ul className="legend" aria-label="Cores da tela de treino">
+          <li><i className="swatch swatch-good" aria-hidden="true" />Verde: mantenha</li>
+          <li><i className="swatch swatch-adjust" aria-hidden="true" />Âmbar: ajuste</li>
+        </ul>
       </section>
+
+      <footer className="page-actions">
+        {status === "audio-ready" ? (
+          <button className="primary-button" type="button" onClick={beginTraining} disabled={starting}>
+            {starting ? "Preparando…" : soundOn ? "Ativar áudio e começar" : "Começar sem som"}
+          </button>
+        ) : (
+          <button className="primary-button" type="button" onClick={startSession} disabled={status === "requesting"}>
+            {status === "requesting" ? "Solicitando acesso…" : status === "denied" || status === "unsupported" ? "Tentar novamente" : "Começar"}
+          </button>
+        )}
+        {message && <p className="error-message" role="alert">{message}</p>}
+        <p className="emergency">
+          Emergência real? <a href="tel:192" aria-label="Ligar para o SAMU no número 192">Ligue 192</a>
+        </p>
+        <p className="fine-print">Protótipo educacional. A profundidade é estimada e o app não substitui treinamento certificado.</p>
+      </footer>
     </main>
   );
 }
